@@ -1,31 +1,3 @@
-# === Auto-install required packages if missing ===
-import os
-import subprocess
-import sys
-
-def install(package):
-    subprocess.check_call([sys.executable, "-m", "pip", "install", package])
-
-required_packages = [
-    "faiss-cpu==1.7.4",
-    "sentence-transformers",
-    "transformers",
-    "torch",
-    "torchaudio",
-    "langdetect",
-    "gTTS",
-    "pydub",
-    "translate",
-    "streamlit"
-]
-
-for package in required_packages:
-    try:
-        __import__(package.split("==")[0])
-    except ImportError:
-        install(package)
-
-# === Your Streamlit App Starts Here ===
 import streamlit as st
 from llm_backend import process_input, knowledge_base
 import warnings
