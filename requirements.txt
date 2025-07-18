@@ -1,24 +1,10 @@
-# Streamlit for frontend
-streamlit
-
-# Whisper for audio transcription
-openai-whisper
-
-# Transformers and sentence transformers for LLM & embeddings
-transformers
-sentence-transformers
-
-# FAISS for vector similarity search
-faiss-cpu
-
-# Language detection and translation
-langdetect
-googletrans==4.0.0-rc1
-
-# For downloading models from Google Drive
-gdown
-
-# Torch dependencies (compatible with CPU version)
-torch
-torchaudio
-numpy
+streamlit==1.35.0
+faiss-cpu==1.7.4
+sentence-transformers==2.2.2
+transformers==4.41.1
+torch==2.2.2
+torchaudio==2.2.2
+langdetect==1.0.9
+gTTS==2.5.1
+pydub==0.25.1
+translate==3.6.1
