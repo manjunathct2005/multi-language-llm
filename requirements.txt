@@ -1,10 +1,7 @@
-streamlit==1.35.0
-faiss-cpu==1.7.4
-sentence-transformers==2.2.2
-transformers==4.41.1
-torch==2.2.2
-torchaudio==2.2.2
-langdetect==1.0.9
-gTTS==2.5.1
-pydub==0.25.1
-translate==3.6.1
+streamlit
+transformers
+sentence-transformers
+torch
+faiss-cpu
+langdetect
+googletrans==4.0.0-rc1
