@@ -1,120 +1,95 @@
 import os
-import re
-import faiss
 import torch
-import numpy as np
+import faiss
+import re
 from langdetect import detect
-from googletrans import Translator
-from sentence_transformers import SentenceTransformer
+from transformers import MBartForConditionalGeneration, MBart50TokenizerFast
+from sentence_transformers import SentenceTransformer, util
 
-# === CONFIG ===
-TEXT_FOLDER = r"D:\hindupur_dataset\my1"
-MODEL_NAME = "all-MiniLM-L6-v2"
-translator = Translator()
-model = SentenceTransformer(MODEL_NAME)
+# Load multilingual models
+embedding_model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+translate_en = MBartForConditionalGeneration.from_pretrained("facebook/mbart-large-50-many-to-many-mmt")
+tokenizer_en = MBart50TokenizerFast.from_pretrained("facebook/mbart-large-50-many-to-many-mmt")
 
-# === Clean and Chunk Logic ===
-def clean_and_chunk(text):
-    text = re.sub(r"[^\x00-\x7F]+", " ", text)  # Remove emojis/non-ASCII
-    text = re.sub(r"\s{2,}", " ", text)
-    text = re.sub(r"---+", "\n---\n", text)  # Normalize topic markers
-    text = re.sub(r"\n{2,}", "\n", text)
+# Set to use CUDA if available
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+translate_en = translate_en.to(device)
 
-    # Split using topic boundaries
-    raw_chunks = re.split(r"\n\s*---\s*\n", text)
-    clean_chunks = []
+# Directory to load text files from
+TRANSCRIPT_DIR = "transcripts"
+knowledge_base = []
+embedding_dim = 384  # for MiniLM-L6-v2
 
-    for chunk in raw_chunks:
-        chunk = chunk.strip()
-        if not chunk or len(chunk) < 50:
-            continue
-        lines = chunk.split("\n")
-        cleaned = "\n".join([line.strip() for line in lines if line.strip()])
-        clean_chunks.append(cleaned)
-    
-    return clean_chunks
-
-# === Load documents
-def load_documents():
-    all_chunks = []
-    for file in os.listdir(TEXT_FOLDER):
+# Load all transcript files
+def load_knowledge():
+    texts = []
+    for file in os.listdir(TRANSCRIPT_DIR):
         if file.endswith(".txt"):
-            with open(os.path.join(TEXT_FOLDER, file), encoding="utf-8") as f:
-                text = f.read()
-                chunks = clean_and_chunk(text)
-                all_chunks.extend(chunks)
-    return all_chunks
+            with open(os.path.join(TRANSCRIPT_DIR, file), "r", encoding="utf-8") as f:
+                raw = f.read()
+                # Clean repetitive/irrelevant lines
+                lines = [line.strip() for line in raw.splitlines() if len(line.strip()) > 20]
+                text = "\n".join(sorted(set(lines), key=lines.index))
+                texts.append(text)
+    return texts
 
-# === Build vector index
-print("[✓] Loading and cleaning text files...")
-knowledge_base = load_documents()
-print(f"[✓] {len(knowledge_base)} knowledge blocks found.")
-
-print("[✓] Creating embeddings...")
-kb_embeddings = model.encode(knowledge_base, convert_to_numpy=True, show_progress_bar=True)
-
-dimension = kb_embeddings.shape[1]
-index = faiss.IndexFlatL2(dimension)
-index.add(kb_embeddings)
-print("[✓] FAISS index ready.")
-
-# === Language Translate
+# Translate non-English queries to English
 def translate_to_en(text):
-    try:
-        text_clean = re.sub(r"[^\w\s]", "", text.lower().strip())
-        word_count = len(text_clean.split())
+    src_lang = detect(text)
+    if src_lang == 'en':
+        return text, 'en'
+    tokenizer_en.src_lang = f"{src_lang}_XX"
+    encoded = tokenizer_en(text, return_tensors="pt", truncation=True).to(device)
+    generated = translate_en.generate(**encoded, forced_bos_token_id=tokenizer_en.lang_code_to_id["en_XX"])
+    translated = tokenizer_en.decode(generated[0], skip_special_tokens=True)
+    return translated, src_lang
 
-        # If very short, assume English
-        if word_count <= 3:
-            return text.strip(), "en"
-
-        lang = detect(text_clean)
-
-        if lang not in ["en", "te"]:
-            return text.strip(), "en"  # fallback as English
-        if lang == "en":
-            return text.strip(), "en"
-        translated = translator.translate(text, src="te", dest="en")
-        return translated.text.strip(), "te"
-    except Exception as e:
-        return text.strip(), "en"  # fallback on failure
-
-
-def translate_back(text, lang):
-    if lang == "en":
+# Translate answers back to user’s original language
+def translate_from_en(text, tgt_lang):
+    if tgt_lang == 'en':
         return text
-    try:
-        return translator.translate(text, src="en", dest=lang).text
-    except:
-        return text
+    tokenizer_en.src_lang = "en_XX"
+    encoded = tokenizer_en(text, return_tensors="pt", truncation=True).to(device)
+    generated = translate_en.generate(**encoded, forced_bos_token_id=tokenizer_en.lang_code_to_id[f"{tgt_lang}_XX"])
+    translated = tokenizer_en.decode(generated[0], skip_special_tokens=True)
+    return translated
 
-# === Semantic Search
-def find_best_paragraph(query_en, top_k=3):
-    query_vector = model.encode([query_en], convert_to_numpy=True)
-    D, I = index.search(query_vector, top_k)
-    matches = []
-    for i, score in zip(I[0], D[0]):
-        if score < 1.1:  # tighter match
-            matches.append((knowledge_base[i], 1 - score))
-    return matches
+# Embed and index all sentences
+def build_vector_store(texts):
+    sentences = []
+    file_index = []
+    for doc in texts:
+        for sent in re.split(r'(?<=[.?!])\s+', doc):
+            if 30 < len(sent) < 1000:
+                sentences.append(sent)
+                file_index.append(sent)
+    embeddings = embedding_model.encode(sentences, convert_to_tensor=False)
+    index = faiss.IndexFlatL2(embedding_dim)
+    index.add(embeddings)
+    return index, sentences
 
-# === Main Process
+# Run similarity search and return best result
 def process_input(query):
-    query = query.strip()
-    if not query:
-        return "Please enter a question.", "en"
+    global knowledge_base, kb_index
 
-    query_en, lang = translate_to_en(query)
-    if query_en is None:
-        return "Only Telugu and English are supported.", "en"
+    translated_query, input_lang = translate_to_en(query)
+    query_embedding = embedding_model.encode([translated_query])
+    D, I = kb_index.search(query_embedding, k=1)
 
-    if not knowledge_base:
-        return "Knowledge base is empty.", lang
+    best_score = D[0][0]
+    best_answer = knowledge_base[I[0][0]] if D[0][0] < 1.5 else "No relevant answer found."
 
-    matches = find_best_paragraph(query_en, top_k=3)
-    if matches:
-        best_text, score = matches[0]
-        translated = translate_back(best_text, lang)
-        return translated.strip(), f"{score:.2f}"
+    if input_lang != 'en':
+        best_answer = translate_from_en(best_answer, input_lang)
+
+    return best_answer, f"{round(1 / (1 + best_score), 2)} confidence"
+
+# Initialize KB on load
+try:
+    knowledge_texts = load_knowledge()
+    if knowledge_texts:
+        kb_index, knowledge_base = build_vector_store(knowledge_texts)
     else:
-        return "No relevant answer found.", lang
+        knowledge_base = []
+except Exception as e:
+    knowledge_base = []
