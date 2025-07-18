@@ -1,46 +1,38 @@
+# === Auto-install required packages if missing ===
+import os
+import subprocess
+import sys
+
+def install(package):
+    subprocess.check_call([sys.executable, "-m", "pip", "install", package])
+
+required_packages = [
+    "faiss-cpu==1.7.4",
+    "sentence-transformers",
+    "transformers",
+    "torch",
+    "torchaudio",
+    "langdetect",
+    "gTTS",
+    "pydub",
+    "translate",
+    "streamlit"
+]
+
+for package in required_packages:
+    try:
+        __import__(package.split("==")[0])
+    except ImportError:
+        install(package)
+
+# === Your Streamlit App Starts Here ===
 import streamlit as st
 from llm_backend import process_input, knowledge_base
 import warnings
 import re
-import os
-import gdown
 
 warnings.filterwarnings("ignore")
 
-# ========== CONFIG ==========
-MODEL_FOLDER_PATH = "models"
-GOOGLE_DRIVE_FOLDER_ID = "https://drive.google.com/drive/folders/19q5O6vdFvOpAAFlZ7epIplGEGIPMYzZl?usp=drive_link"  # <- Replace this!
-MODEL_FILES = [
-    "whisper-base/config.json",
-    "whisper-base/pytorch_model.bin",
-    "sentence-transformers/all-MiniLM-L6-v2/config.json",
-    "sentence-transformers/all-MiniLM-L6-v2/pytorch_model.bin",
-    # Add more files if needed...
-]
-
-# ========== DOWNLOAD MODELS FROM GOOGLE DRIVE ==========
-
-@st.cache_resource
-def download_models():
-    if not os.path.exists(MODEL_FOLDER_PATH):
-        os.makedirs(MODEL_FOLDER_PATH)
-
-    for file_path in MODEL_FILES:
-        local_path = os.path.join(MODEL_FOLDER_PATH, file_path)
-        if not os.path.exists(local_path):
-            os.makedirs(os.path.dirname(local_path), exist_ok=True)
-            file_name = os.path.basename(file_path)
-            gdown.download(
-                f"https://drive.google.com/uc?id={GOOGLE_DRIVE_FOLDER_ID}&export=download&confirm=t",
-                output=local_path,
-                quiet=False,
-                fuzzy=True
-            )
-    return True
-
-download_models()
-
-# ========== STREAMLIT UI ==========
 st.set_page_config(page_title="📚 Multilingual Knowledge Base", layout="wide")
 st.title("💡 Multilingual Knowledge Base Assistant")
 st.markdown("Ask in **Telugu** or **English**. You'll get clean responses from your `.txt` knowledge base.")
