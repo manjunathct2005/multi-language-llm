@@ -1,0 +1,298 @@
+
+# 📘 Part 5: Exploratory Data Analysis (EDA)
+
+Exploratory Data Analysis (EDA) is the process of visually and statistically exploring data to understand its main characteristics before applying machine learning algorithms. EDA answers questions like: *What is the distribution of variables? Are there outliers? How are features related?*
+
+### 🔹 1. Descriptive Statistics
+
+```python
+# Summary of numerical columns
+df.describe()
+```
+
+**Explanation:**
+
+* Shows count, mean, standard deviation, min, and quartiles.
+* Helps spot anomalies (e.g., very high max).
+
+```python
+# Unique values in a categorical column
+df['Gender'].value_counts()
+```
+
+**Explanation:**
+
+* Shows how often each category appears.
+
+---
+
+### 🔹 2. Visualizing Distributions
+
+```python
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+sns.histplot(df['Age'], bins=20)
+plt.title("Age Distribution")
+plt.show()
+```
+
+**Explanation:**
+
+* Histogram shows how values are distributed across bins.
+* Peaks show concentrations; tails show outliers.
+
+```python
+sns.boxplot(x='Gender', y='Income', data=df)
+plt.title("Income by Gender")
+plt.show()
+```
+
+**Explanation:**
+
+* Boxplot displays medians, IQR, and outliers for each category.
+
+---
+
+### 🔹 3. Relationships Between Features
+
+```python
+sns.scatterplot(x='Age', y='Income', data=df)
+plt.title("Age vs Income")
+plt.show()
+```
+
+**Explanation:**
+
+* Identifies correlation or trends (linear, nonlinear).
+
+```python
+sns.pairplot(df[['Age', 'Income', 'Spending_Score']])
+```
+
+**Explanation:**
+
+* Visualizes pairwise relationships between numeric features.
+
+---
+
+### 🔹 4. Correlation Heatmap
+
+```python
+corr = df.corr()
+sns.heatmap(corr, annot=True, cmap="coolwarm")
+plt.title("Correlation Matrix")
+plt.show()
+```
+
+**Explanation:**
+
+* Shows correlation coefficients between variables.
+* `1` = perfect correlation, `-1` = perfect inverse correlation.
+
+---
+
+### 🔹 5. Categorical Feature Analysis
+
+```python
+sns.countplot(x='City', data=df)
+plt.title("City Distribution")
+plt.xticks(rotation=45)
+plt.show()
+```
+
+**Explanation:**
+
+* Frequency plot of categorical values.
+* Helps detect data imbalance.
+
+---
+
+### 🔹 Summary
+
+EDA gives you a bird's eye view of your dataset:
+
+* What needs transformation
+* What features are important
+* What relationships exist
+* What outliers or anomalies exist
+
+---
+
+# 📘 Part 6: Introduction to Machine Learning
+
+Machine Learning (ML) is a subset of Artificial Intelligence where machines learn patterns from data without being explicitly programmed.
+
+---
+
+### 🔹 1. Types of Machine Learning
+
+| Type            | Description                         | Example                |
+| --------------- | ----------------------------------- | ---------------------- |
+| Supervised      | Labeled data: Predict target        | House price prediction |
+| Unsupervised    | No labels: Group or structure data  | Customer segmentation  |
+| Semi-Supervised | Mix of labeled and unlabeled data   | Image labeling         |
+| Reinforcement   | Learn via feedback from environment | Game playing, Robotics |
+
+---
+
+### 🔹 2. Workflow of an ML Project
+
+1. Problem understanding
+2. Data collection
+3. Cleaning & feature engineering
+4. Splitting dataset (train/test)
+5. Model selection
+6. Training
+7. Evaluation
+8. Deployment
+
+---
+
+### 🔹 3. Train-Test Split
+
+```python
+from sklearn.model_selection import train_test_split
+X = df.drop('target', axis=1)
+y = df['target']
+
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2)
+```
+
+**Explanation:**
+
+* `train_test_split` separates data into training and test sets.
+* `test_size=0.2` means 80% training, 20% testing.
+
+---
+
+### 🔹 4. Model Evaluation Metrics
+
+| Problem Type   | Metric                          |
+| -------------- | ------------------------------- |
+| Regression     | MAE, MSE, RMSE, R^2             |
+| Classification | Accuracy, Precision, Recall, F1 |
+
+```python
+from sklearn.metrics import accuracy_score
+accuracy = accuracy_score(y_test, predictions)
+```
+
+**Explanation:**
+
+* Compares model predictions vs actual labels.
+
+---
+
+# 📘 Part 7: Machine Learning Algorithms
+
+---
+
+### 🔹 1. Linear Regression
+
+```python
+from sklearn.linear_model import LinearRegression
+model = LinearRegression()
+model.fit(X_train, y_train)
+```
+
+* Predicts numeric target from input features.
+* Assumes linear relationship between inputs and outputs.
+
+---
+
+### 🔹 2. Logistic Regression
+
+```python
+from sklearn.linear_model import LogisticRegression
+model = LogisticRegression()
+model.fit(X_train, y_train)
+```
+
+* For binary classification.
+* Outputs probability (0 to 1) and chooses class.
+
+---
+
+### 🔹 3. Decision Trees
+
+```python
+from sklearn.tree import DecisionTreeClassifier
+model = DecisionTreeClassifier()
+model.fit(X_train, y_train)
+```
+
+* Splits data into branches using feature thresholds.
+* Easy to visualize and interpret.
+
+---
+
+### 🔹 4. Random Forest
+
+```python
+from sklearn.ensemble import RandomForestClassifier
+model = RandomForestClassifier()
+model.fit(X_train, y_train)
+```
+
+* Ensemble of decision trees.
+* Reduces overfitting.
+
+---
+
+### 🔹 5. K-Nearest Neighbors (KNN)
+
+```python
+from sklearn.neighbors import KNeighborsClassifier
+model = KNeighborsClassifier(n_neighbors=5)
+model.fit(X_train, y_train)
+```
+
+* Classifies based on closest `k` data points.
+* Lazy learner (no training phase).
+
+---
+
+### 🔹 6. Support Vector Machines (SVM)
+
+```python
+from sklearn.svm import SVC
+model = SVC()
+model.fit(X_train, y_train)
+```
+
+* Finds the hyperplane that best separates classes.
+* Works well with high-dimensional data.
+
+---
+
+### 🔹 7. Naive Bayes
+
+```python
+from sklearn.naive_bayes import GaussianNB
+model = GaussianNB()
+model.fit(X_train, y_train)
+```
+
+* Based on Bayes' theorem.
+* Assumes independence between features.
+
+---
+
+### 🔹 8. Clustering (Unsupervised)
+
+```python
+from sklearn.cluster import KMeans
+model = KMeans(n_clusters=3)
+model.fit(X)
+```
+
+* Divides data into `k` clusters based on feature similarity.
+* No labels needed.
+
+---
+
+### 🔹 Summary
+
+* Each ML algorithm has strengths and trade-offs.
+* Choice depends on **data type**, **feature size**, **interpretability needs**, and **task objective**.

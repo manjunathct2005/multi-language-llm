@@ -1,0 +1,220 @@
+# 📘 Extended ML Libraries: TensorFlow, Keras, XGBoost, LightGBM, and More
+
+This section expands your training corpus with deep, richly explained content on additional ML libraries. Every snippet is followed by a **description of what it does**, its purpose, and real-world application.
+
+---
+
+## 🧠 1. TensorFlow (Google)
+
+**Purpose**: An open-source library for building, training, and deploying machine learning and deep learning models at scale.
+
+### 🔧 Basic Usage
+
+```python
+import tensorflow as tf
+
+# Define a constant tensor
+tensor = tf.constant([[1, 2], [3, 4]])
+print(tensor)
+```
+
+**Explanation**: This creates a 2×2 constant tensor. Tensors are the fundamental unit of data in TensorFlow.
+
+### 🔧 Define a Neural Network Model
+
+```python
+model = tf.keras.Sequential([
+  tf.keras.layers.Dense(64, activation='relu', input_shape=(10,)),
+  tf.keras.layers.Dense(1, activation='sigmoid')
+])
+```
+
+**Explanation**: This builds a 2-layer feedforward neural network:
+
+* First layer: 64 neurons, ReLU activation
+* Second (output): 1 neuron, sigmoid (binary classification)
+
+### 🔧 Compile and Train
+
+```python
+model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
+model.fit(X_train, y_train, epochs=10)
+```
+
+**Explanation**: Compiles the model with Adam optimizer, binary cross-entropy loss, and trains for 10 epochs.
+
+---
+
+## 🤖 2. Keras
+
+**Purpose**: High-level API built on TensorFlow for fast prototyping of deep learning models.
+
+### 🔧 Example
+
+```python
+from keras.models import Sequential
+from keras.layers import Dense
+
+model = Sequential()
+model.add(Dense(32, activation='relu', input_dim=8))
+model.add(Dense(1, activation='sigmoid'))
+```
+
+**Explanation**:
+
+* `Sequential()` is a stack of layers.
+* `Dense(32)` is a fully connected layer with 32 neurons.
+* `input_dim=8` means the model expects 8 input features.
+
+---
+
+## 🚀 3. XGBoost (Extreme Gradient Boosting)
+
+**Purpose**: Fast, optimized, scalable gradient-boosting algorithm. Excellent for structured/tabular data.
+
+### 🔧 Training an XGBoost Model
+
+```python
+import xgboost as xgb
+from sklearn.datasets import load_breast_cancer
+from sklearn.model_selection import train_test_split
+
+X, y = load_breast_cancer(return_X_y=True)
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3)
+
+model = xgb.XGBClassifier()
+model.fit(X_train, y_train)
+```
+
+**Explanation**: Loads a breast cancer dataset, splits it, and fits an XGBoost classifier.
+
+### 🔧 Prediction & Evaluation
+
+```python
+from sklearn.metrics import accuracy_score
+preds = model.predict(X_test)
+print("Accuracy:", accuracy_score(y_test, preds))
+```
+
+**Explanation**: Evaluates model using accuracy on test data.
+
+---
+
+## 🌱 4. LightGBM (Light Gradient Boosting Machine)
+
+**Purpose**: Fast gradient boosting framework based on decision trees. More efficient on large datasets.
+
+### 🔧 Example
+
+```python
+import lightgbm as lgb
+from sklearn.datasets import load_digits
+from sklearn.model_selection import train_test_split
+
+X, y = load_digits(return_X_y=True)
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25)
+
+model = lgb.LGBMClassifier()
+model.fit(X_train, y_train)
+```
+
+**Explanation**: Loads digits dataset and trains a LightGBM classifier. Faster than XGBoost on larger sets.
+
+---
+
+## 📊 5. Statsmodels
+
+**Purpose**: Advanced statistical tests and models, such as OLS regression.
+
+### 🔧 OLS Regression
+
+```python
+import statsmodels.api as sm
+
+X = sm.add_constant([1, 2, 3, 4, 5])  # Add intercept term
+y = [2, 4, 6, 8, 10]
+model = sm.OLS(y, X).fit()
+print(model.summary())
+```
+
+**Explanation**:
+
+* Adds a constant (intercept)
+* Fits a linear model: y = β₀ + β₁x
+* `.summary()` gives statistical analysis
+
+---
+
+## 📊 6. Plotly
+
+**Purpose**: Interactive visualizations for dashboards and web apps.
+
+### 🔧 Example
+
+```python
+import plotly.express as px
+
+df = px.data.iris()
+fig = px.scatter(df, x="sepal_width", y="sepal_length", color="species")
+fig.show()
+```
+
+**Explanation**: Creates an interactive scatterplot of iris dataset.
+
+---
+
+## 🗣️ 7. NLTK (Natural Language Toolkit)
+
+**Purpose**: Suite of libraries and programs for text processing.
+
+### 🔧 Tokenization & Stopword Removal
+
+```python
+import nltk
+from nltk.corpus import stopwords
+from nltk.tokenize import word_tokenize
+nltk.download('punkt')
+nltk.download('stopwords')
+
+text = "This is a sample sentence."
+tokens = word_tokenize(text)
+filtered = [w for w in tokens if w.lower() not in stopwords.words('english')]
+```
+
+**Explanation**: Tokenizes sentence and removes common English stopwords like 'is', 'a', 'the'.
+
+---
+
+## 🧠 8. spaCy
+
+**Purpose**: Fast NLP with pre-trained models and pipelines.
+
+### 🔧 Named Entity Recognition
+
+```python
+import spacy
+nlp = spacy.load("en_core_web_sm")
+doc = nlp("Apple is looking at buying U.K. startup for $1 billion")
+for ent in doc.ents:
+    print(ent.text, ent.label_)
+```
+
+**Explanation**: Recognizes entities like organizations, locations, money, etc.
+
+---
+
+## 🤖 9. Hugging Face Transformers
+
+**Purpose**: State-of-the-art NLP models (BERT, GPT, T5, etc.)
+
+### 🔧 Sentiment Pipeline
+
+```python
+from transformers import pipeline
+classifier = pipeline("sentiment-analysis")
+print(classifier("I love this product!"))
+```
+
+**Explanation**: Loads a pretrained BERT sentiment classifier and evaluates the sentence.
+
+---
