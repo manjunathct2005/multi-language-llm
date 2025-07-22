@@ -1,22 +1,24 @@
+# llm_backend.py
+
 import os
 import glob
 import torch
 import whisper
 import numpy as np
+import faiss
 from langdetect import detect
 from sentence_transformers import SentenceTransformer, util
 from deep_translator import GoogleTranslator
-import faiss
 
 # Paths
-TRANSCRIPT_DIR = "my1"
+TRANSCRIPT_DIR = "D:/hindupur_dataset/transcripts"
 EMBEDDINGS_PATH = "D:/hindupur_dataset/embeddings1.pt"
 
 # Load models
-whisper_model = whisper.load_model("base")  # change to "small" if needed
+whisper_model = whisper.load_model("base")
 embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
 
-# Translate text to English (for retrieval) and back to original language
+# Translation functions
 def translate_to_english(text):
     try:
         return GoogleTranslator(source='auto', target='en').translate(text)
@@ -29,66 +31,74 @@ def translate_from_english(text, target_lang):
     except:
         return text
 
-# Load or build knowledge base
+# Language detection
+def detect_language(text):
+    try:
+        lang = detect(text)
+        if lang.startswith("en"):
+            return "en"
+        elif lang.startswith("hi"):
+            return "hi"
+        elif lang.startswith("te"):
+            return "te"
+        else:
+            return "unknown"
+    except:
+        return "unknown"
+
+# Clean transcript text
 def clean_text(text):
     lines = text.splitlines()
     cleaned = []
     for line in lines:
-        line = line.strip()
-        if line and not line.lower().startswith(("background noise", "inaudible")):
-            cleaned.append(line)
-    return "\n".join(cleaned)
+        if line.strip() and not any(skip in line.lower() for skip in ["thank", "subscribe", "like", "follow"]):
+            cleaned.append(line.strip())
+    return " ".join(cleaned)
 
-def load_knowledge_base():
-    if not os.path.exists(TRANSCRIPT_DIR):
-        os.makedirs(TRANSCRIPT_DIR)
+# Load knowledge base and cache embeddings
+def knowledge_base(transcript_dir=TRANSCRIPT_DIR):
+    if os.path.exists(EMBEDDINGS_PATH):
+        data = torch.load(EMBEDDINGS_PATH)
+        return data['texts'], data['index'], data['embeddings']
 
-    files = glob.glob(os.path.join(TRANSCRIPT_DIR, "*.txt"))
-    knowledge_blocks = []
-    for file_path in files:
-        with open(file_path, "r", encoding="utf-8") as f:
-            text = f.read().strip()
-            if text:
-                cleaned = clean_text(text)
-                if cleaned:
-                    knowledge_blocks.append(cleaned)
+    texts = []
+    for file in glob.glob(os.path.join(transcript_dir, "*.txt")):
+        with open(file, "r", encoding="utf-8", errors="ignore") as f:
+            raw = f.read()
+            cleaned = clean_text(raw)
+            if cleaned:
+                texts.append(cleaned)
 
-    if not knowledge_blocks:
+    if not texts:
         return [], None, None
 
-    # Generate embeddings
-    embeddings = embedding_model.encode(knowledge_blocks, convert_to_tensor=True)
-    index = faiss.IndexFlatL2(embeddings.shape[1])
-    index.add(embeddings.cpu().detach().numpy())
+    embeddings = embedding_model.encode(texts, convert_to_tensor=True, show_progress_bar=True)
+    embeddings_np = embeddings.cpu().detach().numpy()
+    index = faiss.IndexFlatL2(embeddings_np.shape[1])
+    index.add(embeddings_np)
 
-    return knowledge_blocks, index, embeddings
+    torch.save({'texts': texts, 'index': index, 'embeddings': embeddings}, EMBEDDINGS_PATH)
+    return texts, index, embeddings
 
-knowledge_base, faiss_index, kb_embeddings = load_knowledge_base()
+# Get answer from KB
+def process_input(user_input, texts, index, embeddings, lang="en", style="Summary"):
+    if not user_input or index is None or embeddings is None:
+        return "❌ No knowledge base available."
 
-# Main processor
-def process_input(query):
-    if not query.strip():
-        return "Query is empty.", 0.0
+    # Step 1: Translate to English
+    input_en = translate_to_english(user_input)
+    input_emb = embedding_model.encode(input_en, convert_to_tensor=True)
 
-    try:
-        original_lang = detect(query)
-    except:
-        return "Only Telugu/English questions are supported.", 0.0
+    # Step 2: Search similar
+    scores = util.cos_sim(input_emb, embeddings)[0]
+    best_idx = int(torch.argmax(scores))
+    best_match = texts[best_idx]
 
-    if original_lang not in ['en', 'te', 'hi']:
-        return "Only Telugu/English/Hindi questions are supported.", 0.0
+    # Step 3: Translate answer back
+    if style == "Summary":
+        answer = best_match[:500]
+    else:
+        answer = best_match
 
-    translated_query = translate_to_english(query)
-    query_embedding = embedding_model.encode(translated_query, convert_to_tensor=True)
-    query_embedding_np = query_embedding.cpu().detach().numpy()
-
-    D, I = faiss_index.search(np.array([query_embedding_np]), k=1)
-    best_match_idx = I[0][0]
-    score = float(D[0][0])
-
-    if score > 1.5:  # Adjust threshold based on dataset size
-        return "⚠️ No relevant answer found in your knowledge base.", score
-
-    matched_text = knowledge_base[best_match_idx]
-    answer_translated = translate_from_english(matched_text, original_lang)
-    return answer_translated, score
+    translated_answer = translate_from_english(answer, lang)
+    return translated_answer
