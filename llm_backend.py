@@ -11,7 +11,7 @@ except LookupError:
     nltk.download("punkt")
 
 # ✅ Load transcripts from folder
-def load_transcripts(transcript_folder="transcripts"):
+def load_transcripts(transcript_folder="my1"):
     texts = []
     if not os.path.exists(transcript_folder):
         print(f"[INFO] Transcript folder not found: {transcript_folder}")
