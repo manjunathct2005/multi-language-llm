@@ -1,58 +1,91 @@
 import os
+import re
 import torch
+import faiss
 import numpy as np
 from langdetect import detect
 from googletrans import Translator
-from sentence_transformers import SentenceTransformer, util
+from sentence_transformers import SentenceTransformer
 
-# CONFIG
-TEXT_FOLDER = r"my1"  # just keep your text files here
-EMBEDDINGS_CACHE = "embeddings_cache.pt"
+# === CONFIG ===
+TEXT_FOLDER = "my1"  # Folder with text files
 MODEL_NAME = "all-MiniLM-L6-v2"
-
-# Load embedding model
+translator = Translator()
 model = SentenceTransformer(MODEL_NAME)
 
-# Translator
-translator = Translator()
+# === Clean and Chunk Logic ===
+def clean_and_chunk(text):
+    text = re.sub(r"[^\x00-\x7F]+", " ", text)
+    text = re.sub(r"\s{2,}", " ", text)
+    text = re.sub(r"---+", "\n---\n", text)
+    text = re.sub(r"\n{2,}", "\n", text)
 
-# Load and preprocess text files
-def load_texts():
-    texts = []
-    filenames = []
-    for fname in os.listdir(TEXT_FOLDER):
-        if fname.endswith(".txt"):
-            with open(os.path.join(TEXT_FOLDER, fname), "r", encoding="utf-8") as f:
-                content = f.read().strip().replace("\n", " ")
-                if content:
-                    texts.append(content)
-                    filenames.append(fname)
-    return texts, filenames
+    chunks = re.split(r"\n\s*---\s*\n", text)
+    return [c.strip() for c in chunks if len(c.strip()) > 50]
 
-# Generate or load embeddings
-def get_embeddings(texts):
-    if os.path.exists(EMBEDDINGS_CACHE):
-        data = torch.load(EMBEDDINGS_CACHE)
-        return data["embeddings"], data["texts"]
-    embeddings = model.encode(texts, convert_to_tensor=True)
-    torch.save({"embeddings": embeddings, "texts": texts}, EMBEDDINGS_CACHE)
-    return embeddings, texts
+# === Load documents
+def load_documents():
+    all_chunks = []
+    if not os.path.exists(TEXT_FOLDER):
+        return []
+    for file in os.listdir(TEXT_FOLDER):
+        if file.endswith(".txt"):
+            with open(os.path.join(TEXT_FOLDER, file), encoding="utf-8") as f:
+                text = f.read()
+                chunks = clean_and_chunk(text)
+                all_chunks.extend(chunks)
+    return all_chunks
 
-# Language detection + answer search
-def search_answer(query):
-    input_lang = detect(query)
-    translated_query = translator.translate(query, src=input_lang, dest="en").text
+# === Initialize knowledge base
+knowledge_base = load_documents()
+if knowledge_base:
+    kb_embeddings = model.encode(knowledge_base, convert_to_numpy=True, show_progress_bar=True)
+    index = faiss.IndexFlatL2(kb_embeddings.shape[1])
+    index.add(kb_embeddings)
+else:
+    index = None
 
-    texts, _ = load_texts()
-    if not texts:
-        return "No text data found in 'my1' folder."
+# === Translation
+def translate_to_en(text):
+    try:
+        lang = detect(text)
+        if lang == "en":
+            return text, "en"
+        elif lang == "te":
+            translated = translator.translate(text, src="te", dest="en")
+            return translated.text.strip(), "te"
+        else:
+            return text, "en"
+    except:
+        return text, "en"
 
-    embeddings, text_data = get_embeddings(texts)
-    query_embedding = model.encode(translated_query, convert_to_tensor=True)
+def translate_back(text, lang):
+    try:
+        if lang == "en":
+            return text
+        return translator.translate(text, src="en", dest=lang).text
+    except:
+        return text
 
-    cos_scores = util.cos_sim(query_embedding, embeddings)[0]
-    top_idx = int(torch.argmax(cos_scores))
+# === Search
+def find_best_paragraph(query_en, top_k=3):
+    query_vector = model.encode([query_en], convert_to_numpy=True)
+    D, I = index.search(query_vector, top_k)
+    results = [(knowledge_base[i], 1 - D[0][j]) for j, i in enumerate(I[0])]
+    return results
 
-    best_match = text_data[top_idx]
-    translated_response = translator.translate(best_match, src="en", dest=input_lang).text
-    return translated_response
+# === Main Logic
+def process_input(query):
+    query = query.strip()
+    if not query:
+        return "Please enter a question.", "en"
+    if not knowledge_base or index is None:
+        return "Knowledge base is empty.", "en"
+
+    query_en, lang = translate_to_en(query)
+    matches = find_best_paragraph(query_en)
+
+    if matches:
+        best_text, score = matches[0]
+        return translate_back(best_text, lang), f"{score:.2f}"
+    return "No relevant answer found.", lang
