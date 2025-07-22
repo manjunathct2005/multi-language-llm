@@ -1,85 +1,55 @@
-# llm_backend.py
 import os
 import torch
-import numpy as np
-import faiss
-from langdetect import detect
-from googletrans import Translator
+from transformers import pipeline
 from sentence_transformers import SentenceTransformer
+from sklearn.metrics.pairwise import cosine_similarity
+from deep_translator import GoogleTranslator
+from langdetect import detect
 
-# === CONFIG ===
-TEXT_FOLDER = r"my1"  # Your actual knowledge folder
-MODEL_NAME = "all-MiniLM-L6-v2"
+# Use your own folder containing `.txt` files
+TEXT_FOLDER = "my1"
 
-# === LOAD EMBEDDINGS ===
-def load_transcripts(text_folder):
-    texts = []
-    sources = []
-    for filename in os.listdir(text_folder):
+# Load and embed all paragraphs
+def load_transcripts(folder):
+    texts, sources = [], []
+    for filename in os.listdir(folder):
         if filename.endswith(".txt"):
-            filepath = os.path.join(text_folder, filename)
-            with open(filepath, 'r', encoding='utf-8') as f:
-                content = f.read()
-                # Clean & split into chunks (e.g. sentences)
-                lines = [line.strip() for line in content.split('\n') if line.strip()]
-                texts.extend(lines)
-                sources.extend([filename] * len(lines))
+            path = os.path.join(folder, filename)
+            with open(path, "r", encoding="utf-8") as f:
+                paragraphs = f.read().split("\n\n")
+                for para in paragraphs:
+                    if para.strip():
+                        texts.append(para.strip())
+                        sources.append(filename)
     return texts, sources
 
-# === EMBEDDING ===
-model = SentenceTransformer(MODEL_NAME)
 texts, sources = load_transcripts(TEXT_FOLDER)
-embeddings = model.encode(texts, convert_to_tensor=False, show_progress_bar=True)
-index = faiss.IndexFlatL2(embeddings[0].shape[0])
-index.add(np.array(embeddings))
+embedder = SentenceTransformer("all-MiniLM-L6-v2")
+text_embeddings = embedder.encode(texts, convert_to_tensor=True)
 
-# === TRANSLATION ===
-translator = Translator()
+# Summarization model for answer
+qa_pipeline = pipeline("summarization", model="sshleifer/distilbart-cnn-12-6")
 
-def translate_to_english(text):
+def translate_to_en(text):
     lang = detect(text)
-    if lang == 'en':
-        return text, lang
-    translated = translator.translate(text, dest='en')
-    return translated.text, lang
+    if lang != "en":
+        return GoogleTranslator(source="auto", target="en").translate(text)
+    return text
 
-def translate_back(text, lang):
-    if lang == 'en':
-        return text
-    return translator.translate(text, dest=lang).text
+def process_input(query):
+    original_lang = detect(query)
+    translated_query = translate_to_en(query)
 
-# === SEARCH FUNCTION ===
-def search_similar_questions(query, top_k=3):
-    query_emb = model.encode([query])[0]
-    D, I = index.search(np.array([query_emb]), top_k)
-    return [(texts[i], sources[i]) for i in I[0]]
+    query_embedding = embedder.encode(translated_query, convert_to_tensor=True)
+    similarities = cosine_similarity([query_embedding], text_embeddings)[0]
 
-# === RESPONSE ===
-def process_input(user_query):
-    translated_q, user_lang = translate_to_english(user_query)
-    results = search_similar_questions(translated_q, top_k=1)
+    top_idx = similarities.argsort()[-3:][::-1]
+    top_paragraphs = [texts[i] for i in top_idx]
+    top_text = "\n\n".join(top_paragraphs)
 
-    if not results or not results[0][0]:
-        return translate_back("❌ Sorry, I couldn't find anything related. Try rephrasing.", user_lang)
+    summary = qa_pipeline(top_text, max_length=200, min_length=50, do_sample=False)[0]["summary_text"]
 
-    answer = results[0][0]
+    if original_lang != "en":
+        summary = GoogleTranslator(source="en", target=original_lang).translate(summary)
 
-    # Format into bullet/code/headings if detected
-    formatted = format_output(answer)
-    return translate_back(formatted, user_lang)
-
-# === FORMAT ===
-def format_output(text):
-    import re
-    lines = text.strip().split('\n')
-    formatted = []
-    for line in lines:
-        if re.match(r'^\d+[\).]', line) or line.startswith('- '):
-            formatted.append(f"- {line}")
-        elif line.strip().lower().startswith("step") or ":" in line:
-            formatted.append(f"### {line}")
-        elif line.strip().startswith("```") or "code" in line.lower():
-            formatted.append(f"```python\n{line}\n```")
-        else:
-            formatted.append(line)
-    return "\n".join(formatted)
+    return f"**Answer:**\n\n{summary}\n\n---\n**Sources:** {', '.join(set([sources[i] for i in top_idx]))}"
