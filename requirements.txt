@@ -1,7 +1,6 @@
-streamlit
+torch
 sentence-transformers
-faiss-cpu
+scikit-learn
 langdetect
 deep-translator
-torch
-numpy
+streamlit
