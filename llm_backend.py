@@ -1,144 +1,94 @@
 import os
+import glob
 import torch
-import numpy as np
 import whisper
-import tempfile
-import torchaudio
-from sentence_transformers import SentenceTransformer, util
-import streamlit as st
+import numpy as np
 from langdetect import detect
-from transformers import MarianMTModel, MarianTokenizer
+from sentence_transformers import SentenceTransformer, util
+from deep_translator import GoogleTranslator
+import faiss
 
-# Set directories
+# Paths
 TRANSCRIPT_DIR = "D:/hindupur_dataset/transcripts"
-EMBEDDING_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
-WHISPER_MODEL_NAME = "base"
+EMBEDDINGS_PATH = "D:/hindupur_dataset/embeddings1.pt"
 
-# Load models once
-@st.cache_resource(show_spinner="🔄 Loading models...")
-def load_models():
-    embedder = SentenceTransformer(EMBEDDING_MODEL_NAME)
-    whisper_model = whisper.load_model(WHISPER_MODEL_NAME)
-    return embedder, whisper_model
+# Load models
+whisper_model = whisper.load_model("base")  # change to "small" if needed
+embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
 
-embedder, whisper_model = load_models()
-
-# Translation setup
-TRANSLATORS = {
-    "hi": ("Helsinki-NLP/opus-mt-hi-en", "Helsinki-NLP/opus-mt-en-hi"),
-    "te": ("Helsinki-NLP/opus-mt-te-en", "Helsinki-NLP/opus-mt-en-te"),
-    "kn": ("Helsinki-NLP/opus-mt-kn-en", "Helsinki-NLP/opus-mt-en-kn"),
-}
-
-@st.cache_resource(show_spinner="🔎 Loading translators...")
-def load_translators():
-    loaded = {}
-    for lang, (to_en_model, to_native_model) in TRANSLATORS.items():
-        to_en_tokenizer = MarianTokenizer.from_pretrained(to_en_model)
-        to_en = MarianMTModel.from_pretrained(to_en_model)
-
-        to_lang_tokenizer = MarianTokenizer.from_pretrained(to_native_model)
-        to_lang = MarianMTModel.from_pretrained(to_native_model)
-
-        loaded[lang] = {
-            "to_en": (to_en, to_en_tokenizer),
-            "from_en": (to_lang, to_lang_tokenizer)
-        }
-    return loaded
-
-translators = load_translators()
-
-# Clean text utility
-def clean_text(text):
-    lines = text.split("\n")
-    unique_lines = list(dict.fromkeys([l.strip() for l in lines if l.strip()]))
-    return " ".join(unique_lines)
-
-# Whisper-compatible mel padding
-def pad_or_trim_mel(mel):
-    if mel.shape[-1] < 3000:
-        pad_len = 3000 - mel.shape[-1]
-        mel = torch.nn.functional.pad(mel, (0, pad_len), "constant", 0)
-    return mel[:, :3000]
-
-# Transcribe audio using Whisper
-def transcribe_audio(path):
-    audio = whisper.load_audio(path)
-    mel = whisper.log_mel_spectrogram(audio)
-    mel = pad_or_trim_mel(mel)
-    result = whisper_model.decode(whisper_model.encode(mel))
-    return result.text.strip()
-
-# Cache transcript if exists
-def get_or_transcribe(audio_path):
-    base_name = os.path.basename(audio_path)
-    transcript_path = os.path.join(TRANSCRIPT_DIR, base_name + ".txt")
-
-    if os.path.exists(transcript_path):
-        with open(transcript_path, "r", encoding="utf-8") as f:
-            return f.read()
-
-    text = transcribe_audio(audio_path)
-    os.makedirs(TRANSCRIPT_DIR, exist_ok=True)
-    with open(transcript_path, "w", encoding="utf-8") as f:
-        f.write(text)
-    return text
-
-# Load knowledge base once
-@st.cache_resource(show_spinner="🧠 Loading knowledge base...")
-def load_knowledge_base():
-    texts, embeddings = [], []
-    for fname in os.listdir(TRANSCRIPT_DIR):
-        if fname.endswith(".txt"):
-            with open(os.path.join(TRANSCRIPT_DIR, fname), "r", encoding="utf-8") as f:
-                text = clean_text(f.read())
-                texts.append(text)
-                embeddings.append(embedder.encode(text, convert_to_tensor=True))
-    return texts, embeddings
-
-kb_texts, kb_embeddings = load_knowledge_base()
-
-# Language detection
-def detect_language(text):
+# Translate text to English (for retrieval) and back to original language
+def translate_to_english(text):
     try:
-        return detect(text)
+        return GoogleTranslator(source='auto', target='en').translate(text)
     except:
-        return "en"
-
-# Translate helper
-def translate(text, src_lang, direction="to_en"):
-    if src_lang not in translators:
         return text
 
-    model, tokenizer = translators[src_lang][direction]
-    tokens = tokenizer.prepare_seq2seq_batch([text], return_tensors="pt", padding=True)
-    translated = model.generate(**tokens)
-    return tokenizer.decode(translated[0], skip_special_tokens=True)
+def translate_from_english(text, target_lang):
+    try:
+        return GoogleTranslator(source='en', target=target_lang).translate(text)
+    except:
+        return text
 
-# QA: find best match
-def answer_question(question):
-    original_lang = detect_language(question)
-    q_en = translate(question, original_lang, "to_en") if original_lang != "en" else question
+# Load or build knowledge base
+def clean_text(text):
+    lines = text.splitlines()
+    cleaned = []
+    for line in lines:
+        line = line.strip()
+        if line and not line.lower().startswith(("background noise", "inaudible")):
+            cleaned.append(line)
+    return "\n".join(cleaned)
 
-    q_embedding = embedder.encode(q_en, convert_to_tensor=True)
-    scores = util.pytorch_cos_sim(q_embedding, kb_embeddings)[0]
-    top_idx = torch.argmax(scores).item()
-    top_score = scores[top_idx].item()
+def load_knowledge_base():
+    if not os.path.exists(TRANSCRIPT_DIR):
+        os.makedirs(TRANSCRIPT_DIR)
 
-    if top_score < 0.4:
-        return "❌ Sorry, no relevant answer found."
+    files = glob.glob(os.path.join(TRANSCRIPT_DIR, "*.txt"))
+    knowledge_blocks = []
+    for file_path in files:
+        with open(file_path, "r", encoding="utf-8") as f:
+            text = f.read().strip()
+            if text:
+                cleaned = clean_text(text)
+                if cleaned:
+                    knowledge_blocks.append(cleaned)
 
-    best_answer = kb_texts[top_idx]
-    if original_lang != "en":
-        best_answer = translate(best_answer, original_lang, "from_en")
-    return best_answer
+    if not knowledge_blocks:
+        return [], None, None
 
-# Public functions
-def process_audio(audio_file):
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav", dir="D:/temp_audio") as tmp:
-        tmp.write(audio_file.read())
-        tmp_path = tmp.name
-    return get_or_transcribe(tmp_path)
+    # Generate embeddings
+    embeddings = embedding_model.encode(knowledge_blocks, convert_to_tensor=True)
+    index = faiss.IndexFlatL2(embeddings.shape[1])
+    index.add(embeddings.cpu().detach().numpy())
 
-def process_text_query(query):
-    return answer_question(query)
+    return knowledge_blocks, index, embeddings
+
+knowledge_base, faiss_index, kb_embeddings = load_knowledge_base()
+
+# Main processor
+def process_input(query):
+    if not query.strip():
+        return "Query is empty.", 0.0
+
+    try:
+        original_lang = detect(query)
+    except:
+        return "Only Telugu/English questions are supported.", 0.0
+
+    if original_lang not in ['en', 'te', 'hi']:
+        return "Only Telugu/English/Hindi questions are supported.", 0.0
+
+    translated_query = translate_to_english(query)
+    query_embedding = embedding_model.encode(translated_query, convert_to_tensor=True)
+    query_embedding_np = query_embedding.cpu().detach().numpy()
+
+    D, I = faiss_index.search(np.array([query_embedding_np]), k=1)
+    best_match_idx = I[0][0]
+    score = float(D[0][0])
+
+    if score > 1.5:  # Adjust threshold based on dataset size
+        return "⚠️ No relevant answer found in your knowledge base.", score
+
+    matched_text = knowledge_base[best_match_idx]
+    answer_translated = translate_from_english(matched_text, original_lang)
+    return answer_translated, score
