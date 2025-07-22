@@ -1,132 +1,60 @@
 import os
 import torch
-import re
-from transformers import MBartForConditionalGeneration, MBart50TokenizerFast
 from sentence_transformers import SentenceTransformer, util
 from langdetect import detect
-import glob
-
-# Load translation models
-en2hi_tokenizer = MBart50TokenizerFast.from_pretrained("facebook/mbart-large-50-many-to-many-mmt")
-en2hi_model = MBartForConditionalGeneration.from_pretrained("facebook/mbart-large-50-many-to-many-mmt")
-
-# Load embedding model
-embedding_model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
-
-# Folder path
-TRANSCRIPT_FOLDER = "D:/hindupur_dataset/transcripts"
-
-# Clean text function
-def clean_text(text):
-    text = re.sub(r"#.*", "", text)                     # remove markdown headers
-    text = re.sub(r"\bpart\s*\d+", "", text, flags=re.I) # remove 'part 1', 'Part 2'
-    text = re.sub(r"[^a-zA-Z0-9\s.,!?]", "", text)       # keep only alphanumeric + punctuation
-    text = re.sub(r"\s+", " ", text).strip()             # remove extra whitespace
-    return text
-
-# Load cleaned transcript data
-def load_transcripts():
-    sentences = []
-    for file in glob.glob(os.path.join(TRANSCRIPT_FOLDER, "*.txt")):
-        with open(file, "r", encoding="utf-8") as f:
-            lines = f.readlines()
-            for line in lines:
-                cleaned = clean_text(line)
-                if len(cleaned.split()) > 4:  # skip too short lines
-                    sentences.append(cleaned)
-    embeddings = embedding_model.encode(sentences, convert_to_tensor=True)
-    return sentences, embeddings
-
-# Translate to English (if needed)
-def translate_to_english(text, lang):
-    if lang == "en":
-        return text
-    en2hi_tokenizer.src_lang = lang
-    encoded = en2hi_tokenizer(text, return_tensors="pt")
-    generated = en2hi_model.generate(**encoded, forced_bos_token_id=en2hi_tokenizer.lang_code_to_id["en_XX"])
-    return en2hi_tokenizer.batch_decode(generated, skip_special_tokens=True)[0]
-
-# Translate back to original language
-def translate_to_original(text, lang):
-    if lang == "en":
-        return text
-    en2hi_tokenizer.src_lang = "en_XX"
-    encoded = en2hi_tokenizer(text, return_tensors="pt")
-    generated = en2hi_model.generate(**encoded, forced_bos_token_id=en2hi_tokenizer.lang_code_to_id[f"{lang}_XX"])
-    return en2hi_tokenizer.batch_decode(generated, skip_special_tokens=True)[0]
-
-# Answer generator
-def answer_question(question, sentences, embeddings):
-    detected_lang = detect(question)
-    question_in_english = translate_to_english(question, detected_lang)
-    question_embedding = embedding_model.encode(question_in_english, convert_to_tensor=True)
-    scores = util.cos_sim(question_embedding, embeddings)[0]
-    top_idx = torch.argmax(scores).item()
-    best_answer = sentences[top_idx]
-    return translate_to_original(best_answer, detected_lang)
-import os
-import torch
+from deep_translator import GoogleTranslator
 import re
-from transformers import MBartForConditionalGeneration, MBart50TokenizerFast
-from sentence_transformers import SentenceTransformer, util
-from langdetect import detect
-import glob
 
-# Load translation models
-en2hi_tokenizer = MBart50TokenizerFast.from_pretrained("facebook/mbart-large-50-many-to-many-mmt")
-en2hi_model = MBartForConditionalGeneration.from_pretrained("facebook/mbart-large-50-many-to-many-mmt")
+# Load model once globally
+embedder = SentenceTransformer("all-MiniLM-L6-v2")
 
-# Load embedding model
-embedding_model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
-
-# Folder path
-TRANSCRIPT_FOLDER = "D:/hindupur_dataset/transcripts"
-
-# Clean text function
 def clean_text(text):
-    text = re.sub(r"#.*", "", text)                     # remove markdown headers
-    text = re.sub(r"\bpart\s*\d+", "", text, flags=re.I) # remove 'part 1', 'Part 2'
-    text = re.sub(r"[^a-zA-Z0-9\s.,!?]", "", text)       # keep only alphanumeric + punctuation
-    text = re.sub(r"\s+", " ", text).strip()             # remove extra whitespace
-    return text
+    # Remove emojis, symbols, URLs, multiple spaces
+    text = re.sub(r"http\S+", "", text)                       # URLs
+    text = re.sub(r"[^\w\s.,!?]", "", text)                   # Special characters
+    text = re.sub(r"\n+", " ", text)                          # Newlines
+    text = re.sub(r"\s+", " ", text).strip()                  # Extra spaces
 
-# Load cleaned transcript data
-def load_transcripts():
-    sentences = []
-    for file in glob.glob(os.path.join(TRANSCRIPT_FOLDER, "*.txt")):
-        with open(file, "r", encoding="utf-8") as f:
-            lines = f.readlines()
-            for line in lines:
-                cleaned = clean_text(line)
-                if len(cleaned.split()) > 4:  # skip too short lines
-                    sentences.append(cleaned)
-    embeddings = embedding_model.encode(sentences, convert_to_tensor=True)
-    return sentences, embeddings
+    # Remove repeated segments (like ads, names)
+    lines = list(set(text.split('.')))
+    cleaned = '. '.join([line.strip() for line in lines if len(line.strip()) > 15])
+    return cleaned
 
-# Translate to English (if needed)
-def translate_to_english(text, lang):
-    if lang == "en":
+def load_transcripts(transcript_dir="D:/hindupur_dataset/transcripts"):
+    texts, embeddings = [], []
+    seen_texts = set()
+
+    for filename in os.listdir(transcript_dir):
+        if filename.endswith(".txt"):
+            with open(os.path.join(transcript_dir, filename), "r", encoding="utf-8") as f:
+                raw = f.read()
+                cleaned = clean_text(raw)
+
+                if cleaned and cleaned not in seen_texts:
+                    seen_texts.add(cleaned)
+                    texts.append(cleaned)
+                    embeddings.append(embedder.encode(cleaned, convert_to_tensor=True))
+    
+    return texts, embeddings
+
+def translate_to_en(text, src_lang):
+    if src_lang == "en":
         return text
-    en2hi_tokenizer.src_lang = lang
-    encoded = en2hi_tokenizer(text, return_tensors="pt")
-    generated = en2hi_model.generate(**encoded, forced_bos_token_id=en2hi_tokenizer.lang_code_to_id["en_XX"])
-    return en2hi_tokenizer.batch_decode(generated, skip_special_tokens=True)[0]
+    return GoogleTranslator(source=src_lang, target="en").translate(text)
 
-# Translate back to original language
-def translate_to_original(text, lang):
-    if lang == "en":
+def translate_from_en(text, target_lang):
+    if target_lang == "en":
         return text
-    en2hi_tokenizer.src_lang = "en_XX"
-    encoded = en2hi_tokenizer(text, return_tensors="pt")
-    generated = en2hi_model.generate(**encoded, forced_bos_token_id=en2hi_tokenizer.lang_code_to_id[f"{lang}_XX"])
-    return en2hi_tokenizer.batch_decode(generated, skip_special_tokens=True)[0]
+    return GoogleTranslator(source="en", target=target_lang).translate(text)
 
-# Answer generator
-def answer_question(question, sentences, embeddings):
-    detected_lang = detect(question)
-    question_in_english = translate_to_english(question, detected_lang)
-    question_embedding = embedding_model.encode(question_in_english, convert_to_tensor=True)
-    scores = util.cos_sim(question_embedding, embeddings)[0]
-    top_idx = torch.argmax(scores).item()
-    best_answer = sentences[top_idx]
-    return translate_to_original(best_answer, detected_lang)
+def answer_question(question, texts, embeddings):
+    input_lang = detect(question)
+    translated_q = translate_to_en(question, input_lang)
+
+    q_embedding = embedder.encode(translated_q, convert_to_tensor=True)
+    scores = util.cos_sim(q_embedding, torch.stack(embeddings))[0]
+
+    best_idx = torch.argmax(scores).item()
+    best_answer = texts[best_idx]
+
+    return translate_from_en(best_answer, input_lang)
