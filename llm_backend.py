@@ -1,138 +1,114 @@
 import os
 import re
-import faiss
 import torch
-import zipfile
-import urllib.request
 import numpy as np
+import torchaudio
 from langdetect import detect
-from deep_translator import GoogleTranslator
-from sentence_transformers import SentenceTransformer
+from transformers import pipeline, MarianMTModel, MarianTokenizer
+from sentence_transformers import SentenceTransformer, util
+import whisper
+from tqdm import tqdm
 
 # === CONFIG ===
-TEXT_FOLDER = r"D:\hindupur_dataset\my1"
-MODEL_DIR = r"D:\models\all-MiniLM-L6-v2"
-MODEL_ZIP = r"D:\models\model.zip"
-PCLOUD_URL = "https://e.pcloud.link/publink/download/show?code=XZ4j3B5ZsaPM45tUBakFhtWhDNYBEpAAoHcV"
+TEXT_FOLDER = r"D:\llm project\my1"
+EMBEDDING_MODEL_PATH = r"models/models--sentence-transformers--all-MiniLM-L6-v2"
+WHISPER_MODEL_PATH = r"models/models--openai--whisper-base"
+TRANSLATOR_HI_EN_PATH = r"models/models--Helsinki-NLP--opus-mt-hi-en"
+TRANSLATOR_EN_HI_PATH = r"models/models--Helsinki-NLP--opus-mt-en-hi"
+TEMP_AUDIO_DIR = r"D:\temp_chunks"
 
-# === Download & Extract Model If Needed ===
-def setup_model():
-    if not os.path.exists(MODEL_DIR):
-        os.makedirs(os.path.dirname(MODEL_DIR), exist_ok=True)
-        print("[✓] Downloading model from pCloud...")
-        urllib.request.urlretrieve(PCLOUD_URL, MODEL_ZIP)
+os.makedirs(TEMP_AUDIO_DIR, exist_ok=True)
 
-        print("[✓] Extracting model zip...")
-        with zipfile.ZipFile(MODEL_ZIP, 'r') as zip_ref:
-            zip_ref.extractall(os.path.dirname(MODEL_DIR))
+# === LOAD MODELS ===
+device = "cuda" if torch.cuda.is_available() else "cpu"
 
-        os.remove(MODEL_ZIP)
-        print(f"[✓] Model extracted to: {MODEL_DIR}")
+embedder = SentenceTransformer(EMBEDDING_MODEL_PATH, device=device)
+whisper_model = whisper.load_model(WHISPER_MODEL_PATH, device=device)
 
-setup_model()
+hi_en_tokenizer = MarianTokenizer.from_pretrained(TRANSLATOR_HI_EN_PATH)
+hi_en_model = MarianMTModel.from_pretrained(TRANSLATOR_HI_EN_PATH).to(device)
 
-# === Load Model ===
-model = SentenceTransformer(MODEL_DIR)
+en_hi_tokenizer = MarianTokenizer.from_pretrained(TRANSLATOR_EN_HI_PATH)
+en_hi_model = MarianMTModel.from_pretrained(TRANSLATOR_EN_HI_PATH).to(device)
 
-# === Clean and Chunk Logic ===
-def clean_and_chunk(text):
-    text = re.sub(r"[^\x00-\x7F]+", " ", text)
-    text = re.sub(r"\s{2,}", " ", text)
-    text = re.sub(r"---+", "\n---\n", text)
-    text = re.sub(r"\n{2,}", "\n", text)
-    raw_chunks = re.split(r"\n\s*---\s*\n", text)
-
-    clean_chunks = []
-    for chunk in raw_chunks:
-        chunk = chunk.strip()
-        if not chunk or len(chunk) < 50:
-            continue
-        lines = chunk.split("\n")
-        cleaned = "\n".join([line.strip() for line in lines if line.strip()])
-        clean_chunks.append(cleaned)
-
-    return clean_chunks
-
-# === Load Documents ===
-def load_documents():
-    all_chunks = []
-    for file in os.listdir(TEXT_FOLDER):
-        if file.endswith(".txt"):
-            with open(os.path.join(TEXT_FOLDER, file), encoding="utf-8") as f:
-                text = f.read()
-                chunks = clean_and_chunk(text)
-                all_chunks.extend(chunks)
-    return all_chunks
-
-# === Load and Embed Knowledge Base ===
-print("[✓] Loading and cleaning text files...")
-knowledge_base = load_documents()
-print(f"[✓] {len(knowledge_base)} knowledge blocks found.")
-
-print("[✓] Creating embeddings...")
-kb_embeddings = model.encode(knowledge_base, convert_to_numpy=True, show_progress_bar=True)
-
-dimension = kb_embeddings.shape[1]
-index = faiss.IndexFlatL2(dimension)
-index.add(kb_embeddings)
-print("[✓] FAISS index ready.")
-
-# === Translate to English ===
-def translate_to_en(text):
-    try:
-        text_clean = re.sub(r"[^\w\s]", "", text.lower().strip())
-        word_count = len(text_clean.split())
-
-        if word_count <= 3:
-            return text.strip(), "en"
-
-        lang = detect(text_clean)
-        if lang not in ["en", "te"]:
-            return text.strip(), "en"
-        if lang == "en":
-            return text.strip(), "en"
-
-        translated = GoogleTranslator(source='te', target='en').translate(text)
-        return translated.strip(), "te"
-    except Exception:
-        return text.strip(), "en"
-
-# === Translate Back ===
-def translate_back(text, lang):
-    if lang == "en":
+# === UTILS ===
+def translate(text, src_lang, tgt_lang):
+    if src_lang == tgt_lang:
         return text
-    try:
-        return GoogleTranslator(source='en', target=lang).translate(text)
-    except:
-        return text
-
-# === Find Best Paragraphs ===
-def find_best_paragraph(query_en, top_k=3):
-    query_vector = model.encode([query_en], convert_to_numpy=True)
-    D, I = index.search(query_vector, top_k)
-    matches = []
-    for i, score in zip(I[0], D[0]):
-        if score < 1.1:
-            matches.append((knowledge_base[i], 1 - score))
-    return matches
-
-# === Process Input ===
-def process_input(query):
-    query = query.strip()
-    if not query:
-        return "Please enter a question.", "en"
-
-    query_en, lang = translate_to_en(query)
-    if query_en is None:
-        return "Only Telugu and English are supported.", "en"
-
-    if not knowledge_base:
-        return "Knowledge base is empty.", lang
-
-    matches = find_best_paragraph(query_en, top_k=3)
-    if matches:
-        best_text, score = matches[0]
-        translated = translate_back(best_text, lang)
-        return translated.strip(), f"{score:.2f}"
+    if src_lang == "hi" and tgt_lang == "en":
+        tokenizer, model = hi_en_tokenizer, hi_en_model
+    elif src_lang == "en" and tgt_lang == "hi":
+        tokenizer, model = en_hi_tokenizer, en_hi_model
     else:
-        return "No relevant answer found.", lang
+        return text  # not supported
+    batch = tokenizer(text, return_tensors="pt", truncation=True, padding=True).to(device)
+    generated = model.generate(**batch)
+    return tokenizer.decode(generated[0], skip_special_tokens=True)
+
+def clean_text(text):
+    text = re.sub(r"\s+", " ", text)
+    text = re.sub(r"(?:\b\w+\b\s+){0,2}\1", "", text)
+    return text.strip()
+
+# === AUDIO TRANSCRIPTION ===
+def pad_or_trim_mel(mel):
+    if mel.shape[-1] < 3000:
+        pad_width = 3000 - mel.shape[-1]
+        mel = torch.nn.functional.pad(mel, (0, pad_width), mode='constant', value=0)
+    else:
+        mel = mel[:, :3000]
+    return mel
+
+def transcribe_audio_file(file_path, save_path):
+    audio = whisper.load_audio(file_path)
+    audio = whisper.pad_or_trim(audio)
+    mel = whisper.log_mel_spectrogram(audio).to(whisper_model.device)
+    mel = pad_or_trim_mel(mel)
+    options = whisper.DecodingOptions(fp16=False)
+    result = whisper.decode(whisper_model, mel, options)
+    with open(save_path, "w", encoding="utf-8") as f:
+        f.write(result.text)
+    return result.text
+
+def batch_transcribe_audio(folder):
+    for file in tqdm(os.listdir(folder)):
+        if file.endswith(".wav"):
+            base = os.path.splitext(file)[0]
+            txt_path = os.path.join(TEXT_FOLDER, f"{base}.txt")
+            if not os.path.exists(txt_path):
+                try:
+                    audio_path = os.path.join(folder, file)
+                    transcribe_audio_file(audio_path, txt_path)
+                except Exception as e:
+                    print(f"❌ Failed: {file} - {e}")
+
+# === KNOWLEDGE BASE ===
+def load_knowledge_embeddings(folder):
+    texts, embeddings = [], []
+    for file in os.listdir(folder):
+        if file.endswith(".txt"):
+            with open(os.path.join(folder, file), "r", encoding="utf-8") as f:
+                raw = f.read()
+            cleaned = clean_text(raw)
+            texts.append(cleaned)
+            emb = embedder.encode(cleaned, convert_to_tensor=True)
+            embeddings.append(emb)
+    return texts, torch.stack(embeddings)
+
+# === ANSWER SYSTEM ===
+knowledge_texts, knowledge_embeddings = load_knowledge_embeddings(TEXT_FOLDER)
+
+def answer_question(user_input):
+    input_lang = detect(user_input)
+    question_en = translate(user_input, input_lang, "en")
+
+    query_embedding = embedder.encode(question_en, convert_to_tensor=True)
+    scores = util.pytorch_cos_sim(query_embedding, knowledge_embeddings)[0]
+    best_idx = torch.argmax(scores).item()
+    best_score = scores[best_idx].item()
+
+    if best_score < 0.4:
+        return translate("Sorry, I couldn't find the answer. Try searching online.", "en", input_lang)
+
+    answer_en = knowledge_texts[best_idx]
+    return translate(answer_en, "en", input_lang)
