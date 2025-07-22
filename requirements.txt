@@ -1,8 +1,7 @@
-pydub==0.25.1
-SpeechRecognition==3.10.0
-sentence-transformers==2.7.0
-transformers==4.40.1
+streamlit
+faiss-cpu
+torch
+numpy
 googletrans==4.0.0rc1
-langdetect==1.0.9
-streamlit==1.35.0
-ffmpeg-python==0.2.0
+langdetect
+sentence-transformers
