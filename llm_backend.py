@@ -5,58 +5,54 @@ from langdetect import detect
 from googletrans import Translator
 from sentence_transformers import SentenceTransformer, util
 
-# === CONFIG ===
-TEXT_FOLDER = "my1"
-EMBEDDING_MODEL = "all-MiniLM-L6-v2"
+# CONFIG
+TEXT_FOLDER = r"my1"  # just keep your text files here
+EMBEDDINGS_CACHE = "embeddings_cache.pt"
+MODEL_NAME = "all-MiniLM-L6-v2"
 
-# === LOAD MODEL ===
-model = SentenceTransformer(EMBEDDING_MODEL)
+# Load embedding model
+model = SentenceTransformer(MODEL_NAME)
 
-# === LOAD & EMBED DOCUMENTS ===
-documents = []
-file_names = []
-
-for fname in os.listdir(TEXT_FOLDER):
-    if fname.endswith(".txt"):
-        path = os.path.join(TEXT_FOLDER, fname)
-        with open(path, "r", encoding="utf-8") as f:
-            text = f.read()
-            documents.append(text)
-            file_names.append(fname)
-
-document_embeddings = model.encode(documents, convert_to_tensor=True)
-
-# === TRANSLATOR ===
+# Translator
 translator = Translator()
 
-def detect_language(text):
-    try:
-        return detect(text)
-    except:
-        return "en"
+# Load and preprocess text files
+def load_texts():
+    texts = []
+    filenames = []
+    for fname in os.listdir(TEXT_FOLDER):
+        if fname.endswith(".txt"):
+            with open(os.path.join(TEXT_FOLDER, fname), "r", encoding="utf-8") as f:
+                content = f.read().strip().replace("\n", " ")
+                if content:
+                    texts.append(content)
+                    filenames.append(fname)
+    return texts, filenames
 
-def translate_to_english(text, lang):
-    if lang == "en":
-        return text
-    return translator.translate(text, src=lang, dest="en").text
+# Generate or load embeddings
+def get_embeddings(texts):
+    if os.path.exists(EMBEDDINGS_CACHE):
+        data = torch.load(EMBEDDINGS_CACHE)
+        return data["embeddings"], data["texts"]
+    embeddings = model.encode(texts, convert_to_tensor=True)
+    torch.save({"embeddings": embeddings, "texts": texts}, EMBEDDINGS_CACHE)
+    return embeddings, texts
 
-def translate_back(text, lang):
-    if lang == "en":
-        return text
-    return translator.translate(text, src="en", dest=lang).text
-
+# Language detection + answer search
 def search_answer(query):
-    input_lang = detect_language(query)
-    query_en = translate_to_english(query, input_lang)
-    
-    query_embedding = model.encode(query_en, convert_to_tensor=True)
-    scores = util.cos_sim(query_embedding, document_embeddings)[0]
+    input_lang = detect(query)
+    translated_query = translator.translate(query, src=input_lang, dest="en").text
 
-    best_idx = torch.argmax(scores).item()
-    best_score = scores[best_idx].item()
+    texts, _ = load_texts()
+    if not texts:
+        return "No text data found in 'my1' folder."
 
-    if best_score < 0.3:
-        return translate_back("Sorry, I couldn't find a good answer.", input_lang)
+    embeddings, text_data = get_embeddings(texts)
+    query_embedding = model.encode(translated_query, convert_to_tensor=True)
 
-    best_answer = documents[best_idx]
-    return translate_back(best_answer.strip(), input_lang)
+    cos_scores = util.cos_sim(query_embedding, embeddings)[0]
+    top_idx = int(torch.argmax(cos_scores))
+
+    best_match = text_data[top_idx]
+    translated_response = translator.translate(best_match, src="en", dest=input_lang).text
+    return translated_response
