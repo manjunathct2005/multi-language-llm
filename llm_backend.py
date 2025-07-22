@@ -1,75 +1,83 @@
-# app.py
-
 import os
-import streamlit as st
-import warnings
-import torch
+import re
 import faiss
-from llm_backend import (
-    transcribe_and_process_audio,
-    load_knowledge_base,
-    answer_question,
-    load_model,
-    translate_to_english,
-    translate_from_english,
-)
+import torch
+import numpy as np
+from langdetect import detect
+from sentence_transformers import SentenceTransformer, util
+from googletrans import Translator
 
-warnings.filterwarnings("ignore")
-os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
+# ========== CONFIG ==========
+TEXT_FOLDER = r"D:\llm project\my1"  # Adjust path as needed
+MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 
-# Streamlit page config
-st.set_page_config(page_title="Multilingual LLM Tool", layout="wide")
-st.title("🌍 Multilingual Q&A from Audio/Text Files")
+# ========== LOAD EMBEDDING MODEL ==========
+model = SentenceTransformer(MODEL_NAME)
 
-# Load sentence transformer model using cache_resource
-@st.cache_resource
-def get_model():
-    return load_model()
+# ========== LANGUAGE DETECTION ==========
+def detect_language(text):
+    try:
+        return detect(text)
+    except:
+        return "en"
 
-model = get_model()
+# ========== TRANSLATION ==========
+translator = Translator()
 
-# Load KB (do not pass model as parameter to avoid UnhashableParamError)
-@st.cache_resource
-def get_kb():
-    return load_knowledge_base()
+def translate_to_english(text):
+    return translator.translate(text, dest='en').text
 
-texts, index, embeddings = get_kb()
+def translate_from_english(text, target_lang):
+    return translator.translate(text, dest=target_lang).text
 
-# Sidebar for input mode
-mode = st.sidebar.radio("Select Input Type", ["Text Input", "Audio File"])
+# ========== LOAD TRANSCRIPTS AND CREATE INDEX ==========
+def clean_text(text):
+    text = re.sub(r"\n+", " ", text)
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
 
-# === TEXT MODE ===
-if mode == "Text Input":
-    user_input = st.text_area("Enter your question (any supported language):", height=150)
-    if st.button("Get Answer"):
-        if user_input.strip() == "":
-            st.warning("Please enter a question.")
-        else:
-            # Detect language and translate
-            lang = translate_to_english(user_input, detect_only=True)
-            translated_q = translate_to_english(user_input)
+@st.cache_data(show_spinner=False)
+def load_knowledge_base():
+    texts = []
+    for file in os.listdir(TEXT_FOLDER):
+        if file.endswith(".txt"):
+            with open(os.path.join(TEXT_FOLDER, file), "r", encoding="utf-8") as f:
+                content = f.read()
+                content = clean_text(content)
+                if content:
+                    texts.append(content)
 
-            # Get answer from knowledge base
-            answer = answer_question(translated_q, texts, index, embeddings, model)
+    embeddings = model.encode(texts, convert_to_tensor=True, show_progress_bar=True)
+    index = faiss.IndexFlatL2(embeddings.shape[1])
+    index.add(embeddings.cpu().detach().numpy())
 
-            # Translate back to user language
-            final_answer = translate_from_english(answer, lang)
-            st.success(f"**Answer ({lang}):**\n{final_answer}")
+    return texts, index, embeddings
 
-# === AUDIO MODE ===
-elif mode == "Audio File":
-    uploaded_file = st.file_uploader("Upload Audio File", type=["mp3", "wav", "m4a"])
-    if uploaded_file is not None:
-        with st.spinner("Transcribing and processing..."):
-            question = transcribe_and_process_audio(uploaded_file)
+# ========== QUERY ANSWER ==========
+def get_answer(question, texts, index, embeddings):
+    lang = detect_language(question)
+    translated_q = translate_to_english(question) if lang != "en" else question
 
-        if question:
-            st.info(f"**Transcribed Question:** {question}")
-            lang = translate_to_english(question, detect_only=True)
-            translated_q = translate_to_english(question)
+    q_embedding = model.encode(translated_q, convert_to_tensor=True)
+    D, I = index.search(q_embedding.cpu().numpy().reshape(1, -1), 1)
 
-            answer = answer_question(translated_q, texts, index, embeddings, model)
-            final_answer = translate_from_english(answer, lang)
-            st.success(f"**Answer ({lang}):**\n{final_answer}")
-        else:
-            st.error("Could not transcribe the audio file.")
+    answer = texts[I[0][0]] if I[0][0] < len(texts) else "Sorry, I couldn’t find the answer."
+    return translate_from_english(answer, lang) if lang != "en" else answer
+
+# ========== MAIN INTERFACE ==========
+if __name__ == "__main__":
+    import streamlit as st
+    st.set_page_config(page_title="Multilingual QA", layout="centered")
+
+    st.title("🌐 Multilingual Q&A using Local Embeddings")
+    user_input = st.text_area("Ask your question:", "", height=100)
+
+    if user_input:
+        with st.spinner("Loading knowledge base..."):
+            texts, index, embeddings = load_knowledge_base()
+
+        with st.spinner("Searching for the answer..."):
+            answer = get_answer(user_input, texts, index, embeddings)
+
+        st.success("Answer:")
+        st.write(answer)
