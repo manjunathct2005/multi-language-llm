@@ -1,73 +1,65 @@
 import os
 import torch
+from transformers import pipeline
 from sentence_transformers import SentenceTransformer, util
 from langdetect import detect
-from transformers import MBartForConditionalGeneration, MBart50TokenizerFast
-import re
 
-# Download models from Hugging Face (NOT from local)
+# Load sentence transformer from Hugging Face hub
 embedder = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
-model_hi = MBartForConditionalGeneration.from_pretrained("facebook/mbart-large-50-many-to-many-mmt")
-tokenizer_hi = MBart50TokenizerFast.from_pretrained("facebook/mbart-large-50-many-to-many-mmt")
 
-device = "cuda" if torch.cuda.is_available() else "cpu"
-model_hi = model_hi.to(device)
+# Load translation models (from Hugging Face)
+translator_en_hi = pipeline("translation", model="Helsinki-NLP/opus-mt-en-hi")
+translator_hi_en = pipeline("translation", model="Helsinki-NLP/opus-mt-hi-en")
+translator_multi = pipeline("translation", model="facebook/mbart-large-50-many-to-many-mmt")
 
-# Language code map
-lang_code = {
-    "hi": "hi_IN",
-    "en": "en_XX",
-    "te": "te_IN",
-    "kn": "kn_IN"
-}
+# Cache to avoid reloading
+transcript_folder = "transcripts"
+embedding_cache_path = "embeddings.pt"
 
-# Clean transcript text
-def clean_text(text):
-    text = re.sub(r"\n+", " ", text)
-    text = re.sub(r"\s+", " ", text)
-    text = re.sub(r"\[.*?\]", "", text)
-    text = re.sub(r"\(.*?\)", "", text)
-    text = re.sub(r"(?i)(this (was|is|has been)|thank you|thanks|welcome|okay).*", "", text)
-    return text.strip()
-
-# Load knowledge base from transcripts
-def load_transcripts(folder_path="transcripts"):
+def load_transcripts():
     texts = []
-    for file in os.listdir(folder_path):
-        if file.endswith(".txt"):
-            with open(os.path.join(folder_path, file), "r", encoding="utf-8") as f:
-                content = f.read()
-                texts.append(clean_text(content))
+    for fname in os.listdir(transcript_folder):
+        if fname.endswith(".txt"):
+            with open(os.path.join(transcript_folder, fname), "r", encoding="utf-8") as f:
+                texts.append(f.read())
+    return texts
+
+def get_embeddings(texts):
+    if os.path.exists(embedding_cache_path):
+        return torch.load(embedding_cache_path)
     embeddings = embedder.encode(texts, convert_to_tensor=True)
-    return texts, embeddings
+    torch.save(embeddings, embedding_cache_path)
+    return embeddings
 
-# Translate text to English for search
-def translate_to_english(text):
-    lang = detect(text)
-    if lang == "en":
-        return text, "en"
-    tokenizer_hi.src_lang = lang_code.get(lang, "en_XX")
-    encoded = tokenizer_hi(text, return_tensors="pt").to(device)
-    generated = model_hi.generate(**encoded, forced_bos_token_id=tokenizer_hi.lang_code_to_id["en_XX"])
-    translated = tokenizer_hi.batch_decode(generated, skip_special_tokens=True)[0]
-    return translated, lang
+def detect_language(text):
+    try:
+        return detect(text)
+    except:
+        return "en"
 
-# Translate answer back to original language
-def translate_to_original(text, target_lang):
-    if target_lang == "en":
-        return text
-    tokenizer_hi.src_lang = "en_XX"
-    encoded = tokenizer_hi(text, return_tensors="pt").to(device)
-    generated = model_hi.generate(**encoded, forced_bos_token_id=tokenizer_hi.lang_code_to_id[lang_code.get(target_lang, "en_XX")])
-    translated = tokenizer_hi.batch_decode(generated, skip_special_tokens=True)[0]
-    return translated
+def translate_to_english(text, lang):
+    if lang == "hi":
+        return translator_hi_en(text)[0]["translation_text"]
+    elif lang in ["te", "kn"]:
+        return translator_multi(text, src_lang=lang, tgt_lang="en")[0]["translation_text"]
+    return text
 
-# Main answer function
-def get_answer(user_question, texts, embeddings):
-    question_en, orig_lang = translate_to_english(user_question)
-    question_emb = embedder.encode(question_en, convert_to_tensor=True)
-    scores = util.pytorch_cos_sim(question_emb, embeddings)[0]
+def translate_back(text, lang):
+    if lang == "hi":
+        return translator_en_hi(text)[0]["translation_text"]
+    elif lang in ["te", "kn"]:
+        return translator_multi(text, src_lang="en", tgt_lang=lang)[0]["translation_text"]
+    return text
+
+def answer_question(query, texts, embeddings):
+    lang = detect_language(query)
+    query_en = translate_to_english(query, lang)
+    query_embedding = embedder.encode(query_en, convert_to_tensor=True)
+    scores = util.cos_sim(query_embedding, embeddings)[0]
     best_idx = torch.argmax(scores).item()
-    answer = texts[best_idx]
-    translated_answer = translate_to_original(answer, orig_lang)
-    return translated_answer
+    best_answer = texts[best_idx]
+    return translate_back(best_answer, lang)
+
+# Initialization
+texts = load_transcripts()
+embeddings = get_embeddings(texts)
