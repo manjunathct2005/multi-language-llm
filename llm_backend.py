@@ -11,7 +11,7 @@ from sentence_transformers import SentenceTransformer, util
 from deep_translator import GoogleTranslator
 
 # Paths
-TRANSCRIPT_DIR = "D:/hindupur_dataset/transcripts"
+TRANSCRIPT_DIR = "my1"
 EMBEDDINGS_PATH = "D:/hindupur_dataset/embeddings1.pt"
 
 # Load models
