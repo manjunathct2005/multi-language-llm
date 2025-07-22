@@ -8,7 +8,7 @@ from deep_translator import GoogleTranslator
 from sentence_transformers import SentenceTransformer, util
 
 # === CONFIGURATION ===
-TEXT_FOLDER = r"D:\llm project\my1"  # Path to your transcript text files
+TEXT_FOLDER = "my1"  # Path to your transcript text files
 MODEL_NAME = "all-MiniLM-L6-v2"
 EMBED_DIM = 384  # for MiniLM-based models
 
