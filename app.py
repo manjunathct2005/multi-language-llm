@@ -1,14 +1,38 @@
+# 📘 app.py - Streamlit interface for the Multilingual Knowledge Assistant
+
 import streamlit as st
 from llm_backend import process_input
 
-st.set_page_config(page_title="📚 Smart Multilingual Q&A", layout="centered")
-st.title("🤖 Multilingual Knowledge Assistant")
-st.write("Ask anything from your custom data in **English, Hindi, Telugu, or Kannada**.")
+# Page Configuration
+st.set_page_config(
+    page_title="📚 Smart Multilingual Q&A",
+    layout="centered"
+)
 
-user_input = st.text_input("💬 Ask a question", max_chars=500, placeholder="e.g. इस विषय के बारे में बताएं...")
+# App Title
+st.markdown("## 🤖 Multilingual Knowledge Assistant")
 
+# App Description
+st.markdown("""
+Ask questions about your notes in:
+- **English**
+- **Hindi**
+- **Telugu**
+- **Kannada**
+
+This tool includes:
+- Relevant code snippets (if applicable)
+- Precise, language-matched answers
+- Fast response from your local knowledge base
+""")
+
+# User Input Section
+user_input = st.text_input("💬 Enter your question:", max_chars=500)
+
+# Output Response Section
 if user_input:
     with st.spinner("🔍 Thinking..."):
-        answer = process_input(user_input)
+        response = process_input(user_input)
         st.markdown("---")
-        st.markdown(answer, unsafe_allow_html=True)
+        st.markdown("### 🧠 Answer:")
+        st.markdown(response, unsafe_allow_html=True)
