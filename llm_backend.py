@@ -1,55 +1,52 @@
 import os
 import nltk
-from langdetect import detect
-from difflib import get_close_matches
+from nltk.tokenize import sent_tokenize
+from sentence_transformers import SentenceTransformer, util
+import torch
 
-# Fix: Ensure Punkt tokenizer is downloaded
+# ✅ Auto-download NLTK punkt tokenizer if missing
 try:
     nltk.data.find("tokenizers/punkt")
 except LookupError:
     nltk.download("punkt")
 
-transcript_folder = "my1"
 
-def load_transcripts():
+# ✅ Load and clean all transcripts from 'transcripts' folder
+def load_transcripts(transcript_folder="my1"):
     texts = []
-    for file in os.listdir(transcript_folder):
-        if file.endswith(".txt"):
-            with open(os.path.join(transcript_folder, file), "r", encoding="utf-8") as f:
-                texts.append(f.read())
+    if not os.path.exists(transcript_folder):
+        print(f"[INFO] Transcript folder not found: {transcript_folder}")
+        return []
+
+    for filename in os.listdir(transcript_folder):
+        if filename.endswith(".txt"):
+            with open(os.path.join(transcript_folder, filename), "r", encoding="utf-8") as f:
+                content = f.read().strip()
+                if content:
+                    texts.append(content)
     return texts
 
-# Language detection
-def detect_language(text):
-    try:
-        return detect(text)
-    except:
-        return "en"
 
-def translate_to_english(text, lang):
-    return text
+# ✅ Answer a question using semantic similarity and paragraph grouping
+def answer_question(question, texts):
+    if not texts:
+        return "⚠️ No transcript data found."
 
-def translate_back(text, lang):
-    return text
+    # Load transformer model
+    model = SentenceTransformer("all-MiniLM-L6-v2")
 
-# Main answer logic
-def answer_question(query, texts):
-    lang = detect_language(query)
-    query_en = translate_to_english(query, lang)
+    # Combine and tokenize all texts
+    full_text = " ".join(texts).replace("\n", " ")
+    sentences = sent_tokenize(full_text)
 
-    best_match = ""
-    best_score = 0
+    # Create sentence embeddings
+    sentence_embeddings = model.encode(sentences, convert_to_tensor=True)
+    question_embedding = model.encode(question, convert_to_tensor=True)
 
-    for text in texts:
-        sentences = nltk.sent_tokenize(text.lower())
-        matches = get_close_matches(query_en.lower(), sentences, n=1, cutoff=0.4)
-        if matches:
-            best_match = matches[0]
-            best_score = 1
+    # Compute similarity scores
+    similarities = util.cos_sim(question_embedding, sentence_embeddings)[0]
+    top_k = torch.topk(similarities, k=3)
 
-    if best_score > 0:
-        return translate_back(best_match, lang)
-    else:
-        return translate_back("❌ Sorry, no relevant answer found.", lang)
-
-texts = load_transcripts()
+    # Get top 3 similar sentences and combine them as a paragraph
+    top_answers = [sentences[idx] for idx in top_k.indices]
+    return " ".join(top_answers)
