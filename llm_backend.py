@@ -6,7 +6,7 @@ import zipfile
 import urllib.request
 import numpy as np
 from langdetect import detect
-from googletrans import Translator
+from deep_translator import GoogleTranslator
 from sentence_transformers import SentenceTransformer
 
 # === CONFIG ===
@@ -31,8 +31,7 @@ def setup_model():
 
 setup_model()
 
-# === Load Model and Translator ===
-translator = Translator()
+# === Load Model ===
 model = SentenceTransformer(MODEL_DIR)
 
 # === Clean and Chunk Logic ===
@@ -88,26 +87,26 @@ def translate_to_en(text):
             return text.strip(), "en"
 
         lang = detect(text_clean)
-
         if lang not in ["en", "te"]:
             return text.strip(), "en"
         if lang == "en":
             return text.strip(), "en"
-        translated = translator.translate(text, src="te", dest="en")
-        return translated.text.strip(), "te"
+
+        translated = GoogleTranslator(source='te', target='en').translate(text)
+        return translated.strip(), "te"
     except Exception:
         return text.strip(), "en"
 
-# === Translate Back to Original Language ===
+# === Translate Back ===
 def translate_back(text, lang):
     if lang == "en":
         return text
     try:
-        return translator.translate(text, src="en", dest=lang).text
+        return GoogleTranslator(source='en', target=lang).translate(text)
     except:
         return text
 
-# === Find Best Matching Paragraphs ===
+# === Find Best Paragraphs ===
 def find_best_paragraph(query_en, top_k=3):
     query_vector = model.encode([query_en], convert_to_numpy=True)
     D, I = index.search(query_vector, top_k)
@@ -117,7 +116,7 @@ def find_best_paragraph(query_en, top_k=3):
             matches.append((knowledge_base[i], 1 - score))
     return matches
 
-# === Process User Input ===
+# === Process Input ===
 def process_input(query):
     query = query.strip()
     if not query:
