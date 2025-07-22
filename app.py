@@ -1,35 +1,39 @@
+import os
+import warnings
 import streamlit as st
 from llm_backend import (
-    load_model,
-    load_translator,
-    load_available_languages,
-    detect_language,
-    translate_text,
     load_knowledge_base,
-    answer_question,
+    detect_language,
+    translate_question,
+    retrieve_answer,
 )
 
-st.set_page_config(page_title="Multilingual LLM Q&A", layout="centered")
+warnings.filterwarnings("ignore")
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
+os.environ["STREAMLIT_WATCHER_TYPE"] = "none"
 
-st.title("🌍 Multilingual Q&A Assistant")
-st.markdown("Ask any question in your native language. The system will understand and reply!")
+st.set_page_config(page_title="Multilingual LLM Tool", layout="centered")
 
-model = load_model()
-translator = load_translator()
-supported_languages = load_available_languages()
-texts, index, embeddings = load_knowledge_base(model)
+st.title("🧠 Multilingual Q&A App")
+st.markdown("Ask questions in **Telugu, Hindi, Kannada, or English**. Get answers from transcripts!")
 
-user_input = st.text_input("🔍 Enter your question:")
+# === Load Model and Knowledge Base (no caching for unhashable types) ===
+with st.spinner("🔄 Loading model and knowledge base..."):
+    model, texts, index, embeddings = load_knowledge_base()
 
-if st.button("Get Answer"):
-    if not user_input.strip():
-        st.warning("Please enter a question.")
-    else:
-        src_lang = detect_language(user_input)
-        st.write(f"🗣️ Detected language: `{src_lang}`")
+# === Input Section ===
+query = st.text_input("🔍 Enter your question:")
 
-        translated_input = translate_text(user_input, src_lang, "en")
-        answer = answer_question(translated_input, model, texts, index, embeddings)
+if query:
+    with st.spinner("💬 Processing your question..."):
+        detected_lang = detect_language(query)
+        translated_q = translate_question(query, detected_lang)
 
-        translated_answer = translate_text(answer, "en", src_lang)
-        st.success(f"✅ Answer: {translated_answer}")
+        answer = retrieve_answer(translated_q, model, texts, index, embeddings)
+
+        if answer:
+            st.success("✅ Answer:")
+            st.write(answer if detected_lang == "en" else translate_question(answer, "en", detected_lang))
+        else:
+            st.warning("⚠️ No relevant answer found in the knowledge base.")
+            st.markdown(f"Try refining your question or [search on Google](https://www.google.com/search?q={query}) 🔍")
