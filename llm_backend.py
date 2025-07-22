@@ -1,71 +1,75 @@
+# app.py
+
 import os
+import streamlit as st
+import warnings
 import torch
 import faiss
-import numpy as np
-from langdetect import detect
-from deep_translator import GoogleTranslator
-from sentence_transformers import SentenceTransformer
-import streamlit as st
+from llm_backend import (
+    transcribe_and_process_audio,
+    load_knowledge_base,
+    answer_question,
+    load_model,
+    translate_to_english,
+    translate_from_english,
+)
 
-# CONFIG
-TRANSCRIPTS_FOLDER = r"D:\llm project\my1"
-MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
+warnings.filterwarnings("ignore")
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 
+# Streamlit page config
+st.set_page_config(page_title="Multilingual LLM Tool", layout="wide")
+st.title("🌍 Multilingual Q&A from Audio/Text Files")
+
+# Load sentence transformer model using cache_resource
 @st.cache_resource
-def load_model():
-    return SentenceTransformer(MODEL_NAME)
+def get_model():
+    return load_model()
 
+model = get_model()
+
+# Load KB (do not pass model as parameter to avoid UnhashableParamError)
 @st.cache_resource
-def load_translator():
-    return GoogleTranslator()
+def get_kb():
+    return load_knowledge_base()
 
-@st.cache_resource
-def load_available_languages():
-    return GoogleTranslator().get_supported_languages()
+texts, index, embeddings = get_kb()
 
-def detect_language(text):
-    try:
-        return detect(text)
-    except:
-        return "en"
+# Sidebar for input mode
+mode = st.sidebar.radio("Select Input Type", ["Text Input", "Audio File"])
 
-def translate_text(text, src_lang, dest_lang):
-    if src_lang == dest_lang:
-        return text
-    try:
-        return GoogleTranslator(source=src_lang, target=dest_lang).translate(text)
-    except:
-        return text
+# === TEXT MODE ===
+if mode == "Text Input":
+    user_input = st.text_area("Enter your question (any supported language):", height=150)
+    if st.button("Get Answer"):
+        if user_input.strip() == "":
+            st.warning("Please enter a question.")
+        else:
+            # Detect language and translate
+            lang = translate_to_english(user_input, detect_only=True)
+            translated_q = translate_to_english(user_input)
 
-@st.cache_resource
-def load_knowledge_base(model):
-    texts, embeddings = [], []
-    for filename in os.listdir(TRANSCRIPTS_FOLDER):
-        if filename.endswith(".txt"):
-            path = os.path.join(TRANSCRIPTS_FOLDER, filename)
-            with open(path, "r", encoding="utf-8") as file:
-                lines = file.readlines()
-                for line in lines:
-                    sentence = line.strip()
-                    if sentence:
-                        texts.append(sentence)
-                        embedding = model.encode(sentence)
-                        embeddings.append(embedding)
-    if embeddings:
-        dim = len(embeddings[0])
-        index = faiss.IndexFlatL2(dim)
-        index.add(np.array(embeddings).astype("float32"))
-        return texts, index, embeddings
-    else:
-        return [], None, []
+            # Get answer from knowledge base
+            answer = answer_question(translated_q, texts, index, embeddings, model)
 
-def answer_question(question, model, texts, index, embeddings):
-    if index is None or not texts:
-        return "Knowledge base is empty."
+            # Translate back to user language
+            final_answer = translate_from_english(answer, lang)
+            st.success(f"**Answer ({lang}):**\n{final_answer}")
 
-    question_embedding = model.encode(question)
-    D, I = index.search(np.array([question_embedding]), k=1)
-    if I[0][0] < len(texts):
-        return texts[I[0][0]]
-    else:
-        return "No relevant answer found."
+# === AUDIO MODE ===
+elif mode == "Audio File":
+    uploaded_file = st.file_uploader("Upload Audio File", type=["mp3", "wav", "m4a"])
+    if uploaded_file is not None:
+        with st.spinner("Transcribing and processing..."):
+            question = transcribe_and_process_audio(uploaded_file)
+
+        if question:
+            st.info(f"**Transcribed Question:** {question}")
+            lang = translate_to_english(question, detect_only=True)
+            translated_q = translate_to_english(question)
+
+            answer = answer_question(translated_q, texts, index, embeddings, model)
+            final_answer = translate_from_english(answer, lang)
+            st.success(f"**Answer ({lang}):**\n{final_answer}")
+        else:
+            st.error("Could not transcribe the audio file.")
