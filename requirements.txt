@@ -1,11 +1,9 @@
 transformers==4.40.1
 sentence-transformers==2.7.0
 openai-whisper
+torchaudio==2.2.1
+torch==2.2.2
 ffmpeg-python==0.2.0
 langdetect==1.0.9
 googletrans==4.0.0rc1
-torchaudio==2.7.2
-torch==2.2.2
-numpy==1.26.4
-faiss-cpu==1.8.0
-streamlit==1.35.0
+streamlit
