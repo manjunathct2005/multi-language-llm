@@ -1,77 +1,85 @@
+# llm_backend.py
 import os
-import re
-import faiss
 import torch
 import numpy as np
+import faiss
 from langdetect import detect
-from deep_translator import GoogleTranslator
+from googletrans import Translator
 from sentence_transformers import SentenceTransformer
 
 # === CONFIG ===
-TEXT_FOLDER = r"D:\llm project\my1"  # Change to your folder path
+TEXT_FOLDER = r"my1"  # Your actual knowledge folder
 MODEL_NAME = "all-MiniLM-L6-v2"
 
-# === LOAD MODEL ===
-model = SentenceTransformer(MODEL_NAME)
-
-# === HELPER FUNCTIONS ===
-
-def translate(text, src, tgt):
-    if src == tgt:
-        return text
-    return GoogleTranslator(source=src, target=tgt).translate(text[:5000])
-
-def clean_text(text):
-    lines = text.splitlines()
-    seen = set()
-    cleaned = []
-    for line in lines:
-        line = line.strip()
-        if line and line not in seen:
-            seen.add(line)
-            cleaned.append(line)
-    return cleaned
-
+# === LOAD EMBEDDINGS ===
 def load_transcripts(text_folder):
-    texts, sources = [], []
+    texts = []
+    sources = []
     for filename in os.listdir(text_folder):
         if filename.endswith(".txt"):
-            with open(os.path.join(text_folder, filename), "r", encoding="utf-8") as f:
+            filepath = os.path.join(text_folder, filename)
+            with open(filepath, 'r', encoding='utf-8') as f:
                 content = f.read()
-                for line in clean_text(content):
-                    texts.append(line)
-                    sources.append(filename)
+                # Clean & split into chunks (e.g. sentences)
+                lines = [line.strip() for line in content.split('\n') if line.strip()]
+                texts.extend(lines)
+                sources.extend([filename] * len(lines))
     return texts, sources
 
-def build_embeddings(texts):
-    embeddings = model.encode(texts, show_progress_bar=True, batch_size=16)
-    index = faiss.IndexFlatL2(embeddings.shape[1])
-    index.add(np.array(embeddings))
-    return index, embeddings
-
-# === LOAD KNOWLEDGE BASE ===
-
+# === EMBEDDING ===
+model = SentenceTransformer(MODEL_NAME)
 texts, sources = load_transcripts(TEXT_FOLDER)
-index, _ = build_embeddings(texts)
+embeddings = model.encode(texts, convert_to_tensor=False, show_progress_bar=True)
+index = faiss.IndexFlatL2(embeddings[0].shape[0])
+index.add(np.array(embeddings))
 
-# === ANSWER ENGINE ===
+# === TRANSLATION ===
+translator = Translator()
 
-def search_answer(query):
-    query_emb = model.encode([query])
-    D, I = index.search(np.array(query_emb), k=5)
-    results = [texts[i] for i in I[0]]
-    return results
+def translate_to_english(text):
+    lang = detect(text)
+    if lang == 'en':
+        return text, lang
+    translated = translator.translate(text, dest='en')
+    return translated.text, lang
 
-def format_bullet_answer(results):
-    bullets = "\n".join(f"- {r}" for r in results if r.strip())
-    return bullets.strip() if bullets else None
+def translate_back(text, lang):
+    if lang == 'en':
+        return text
+    return translator.translate(text, dest=lang).text
 
-def process_input(user_input):
-    lang = detect(user_input)
-    query_en = translate(user_input, lang, "en")
-    results = search_answer(query_en)
-    if results:
-        bullets = format_bullet_answer(results)
-        answer_en = bullets if bullets else results[0]
-        return translate(answer_en, "en", lang)
-    return translate("Sorry, I couldn't find the answer in the knowledge base.", "en", lang)
+# === SEARCH FUNCTION ===
+def search_similar_questions(query, top_k=3):
+    query_emb = model.encode([query])[0]
+    D, I = index.search(np.array([query_emb]), top_k)
+    return [(texts[i], sources[i]) for i in I[0]]
+
+# === RESPONSE ===
+def process_input(user_query):
+    translated_q, user_lang = translate_to_english(user_query)
+    results = search_similar_questions(translated_q, top_k=1)
+
+    if not results or not results[0][0]:
+        return translate_back("❌ Sorry, I couldn't find anything related. Try rephrasing.", user_lang)
+
+    answer = results[0][0]
+
+    # Format into bullet/code/headings if detected
+    formatted = format_output(answer)
+    return translate_back(formatted, user_lang)
+
+# === FORMAT ===
+def format_output(text):
+    import re
+    lines = text.strip().split('\n')
+    formatted = []
+    for line in lines:
+        if re.match(r'^\d+[\).]', line) or line.startswith('- '):
+            formatted.append(f"- {line}")
+        elif line.strip().lower().startswith("step") or ":" in line:
+            formatted.append(f"### {line}")
+        elif line.strip().startswith("```") or "code" in line.lower():
+            formatted.append(f"```python\n{line}\n```")
+        else:
+            formatted.append(line)
+    return "\n".join(formatted)
