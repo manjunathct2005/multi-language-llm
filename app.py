@@ -1,28 +1,16 @@
 import os
 import streamlit as st
-from llm_backend import answer_question, load_available_languages
+from llm_backend import answer_question
 
-# === PAGE CONFIG ===
 st.set_page_config(page_title="Multilingual LLM Q&A", layout="centered")
-st.title("🌐 Multilingual LLM Q&A App")
-st.markdown("Ask any question based on your uploaded transcripts!")
+st.title("🌍 Multilingual Q&A LLM")
+st.write("Ask your question in Hindi, Telugu, Kannada, or English.")
 
-# === USER INPUT ===
-query = st.text_input("💬 Enter your question here")
+query = st.text_input("💬 Enter your question:")
 
-if st.button("Ask"):
-    if query.strip():
-        with st.spinner("Processing..."):
-            try:
-                response = answer_question(query)
-                st.success("✅ Answer:")
-                st.write(response)
-            except Exception as e:
-                st.error("⚠️ Something went wrong.")
-                st.exception(e)
-    else:
-        st.warning("❗ Please enter a question first.")
-
-# === FOOTER ===
-st.markdown("---")
-st.markdown("Built with 💻 by Manju Nath using local models only")
+if query:
+    with st.spinner("🔍 Finding answer..."):
+        answer, source = answer_question(query)
+        st.success("✅ Answer:")
+        st.markdown(f"**{answer}**")
+        st.caption(f"📁 Source: {source}")
