@@ -1,7 +1,6 @@
 streamlit
-torch
 faiss-cpu
+torch
 sentence-transformers
 langdetect
 deep-translator
-numpy
