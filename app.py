@@ -1,29 +1,22 @@
-import os
-import warnings
+# app.py
+
 import streamlit as st
+from llm_backend import get_answer
 
-# === Suppress Warnings ===
-warnings.filterwarnings("ignore")
-os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
-os.environ["STREAMLIT_WATCHER_TYPE"] = "none"
+# App title and layout
+st.set_page_config(page_title="🌐 Multilingual Question Answering", layout="centered")
 
-# === Import Backend ===
-try:
-    import llm_backend
-except ImportError:
-    st.error("❌ Could not import `llm_backend.py`. Please ensure it's in the same folder.")
-    st.stop()
-
-# === Page Configuration ===
-st.set_page_config(page_title="🌍 Multilingual LLM App", layout="centered")
 st.title("🌐 Multilingual Question Answering")
-st.markdown("Ask a question in **English, Hindi, Telugu, or Kannada**")
+st.markdown("Ask a question in **English**, **Hindi**, **Telugu**, or **Kannada**")
 
-# === Input Section ===
-query = st.text_input("📝 Enter your question")
+# Input
+query = st.text_input("📝 Enter your question", placeholder="e.g., What is Data Science?")
 
-# === Process & Display Answer ===
-if query:
-    with st.spinner("🔍 Searching for answer..."):
-        answer = llm_backend.answer_question(query)
-        st.success(f"💬 Answer:\n\n{answer}")
+# Answer Button
+if st.button("💬 Answer"):
+    if query.strip() == "":
+        st.warning("Please enter a question.")
+    else:
+        with st.spinner("Searching for best answer..."):
+            response = get_answer(query)
+        st.markdown(f"<span style='color:red'><b>Answer:</b></span><br>{response}", unsafe_allow_html=True)
