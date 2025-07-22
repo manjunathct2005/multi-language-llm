@@ -1,67 +1,60 @@
 # llm_backend.py
 import os
 import torch
+import faiss
 import numpy as np
 from langdetect import detect
 from deep_translator import GoogleTranslator
 from sentence_transformers import SentenceTransformer, util
 
-TRANSCRIPTS_FOLDER = r"D:\llm project\my1"
-MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
+# === CONFIG ===
+TRANSCRIPT_FOLDER = r"D:\llm project\my1"
+EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
-# Load model once
-model = SentenceTransformer(MODEL_NAME)
+# Load model and cached embeddings
+model = SentenceTransformer(EMBEDDING_MODEL, device=DEVICE)
+index = faiss.IndexFlatL2(384)
+corpus = []
+file_names = []
 
-# Load all embeddings
-def load_knowledge_base():
-    knowledge = []
-    for file in os.listdir(TRANSCRIPTS_FOLDER):
-        if file.endswith(".txt"):
-            path = os.path.join(TRANSCRIPTS_FOLDER, file)
-            with open(path, 'r', encoding='utf-8') as f:
-                content = f.read().strip()
-                sentences = content.split('.')
-                for sentence in sentences:
-                    sentence = sentence.strip()
-                    if sentence:
-                        emb = model.encode(sentence)
-                        knowledge.append((sentence, emb))
-    return knowledge
+for fname in os.listdir(TRANSCRIPT_FOLDER):
+    if fname.endswith(".txt"):
+        with open(os.path.join(TRANSCRIPT_FOLDER, fname), 'r', encoding='utf-8') as f:
+            text = f.read()
+            corpus.append(text)
+            file_names.append(fname)
 
-knowledge_base = load_knowledge_base()
+corpus_embeddings = model.encode(corpus, convert_to_tensor=True)
+index.add(corpus_embeddings.cpu().detach().numpy())
 
-# Language detection
 def detect_language(text):
     try:
         return detect(text)
-    except:
+    except Exception:
         return "en"
 
-# Translation
-def translate(text, source, target):
-    if source == target:
+def translate_to_english(text, src_lang):
+    if src_lang == "en":
         return text
-    try:
-        return GoogleTranslator(source=source, target=target).translate(text)
-    except:
+    return GoogleTranslator(source=src_lang, target="en").translate(text)
+
+def translate_from_english(text, target_lang):
+    if target_lang == "en":
         return text
+    return GoogleTranslator(source="en", target=target_lang).translate(text)
 
-# Get Answer
-def get_answer(query):
-    user_lang = detect_language(query)
-    query_en = translate(query, source=user_lang, target="en")
-    query_emb = model.encode(query_en)
+def get_answer(question: str) -> str:
+    input_lang = detect_language(question)
+    translated_question = translate_to_english(question, input_lang)
+    question_embedding = model.encode(translated_question, convert_to_tensor=True)
+    
+    D, I = index.search(question_embedding.cpu().detach().numpy().reshape(1, -1), k=1)
+    
+    if len(I[0]) == 0:
+        return translate_from_english("Sorry, I could not find an answer.", input_lang)
 
-    scores = []
-    for sent, emb in knowledge_base:
-        score = util.cos_sim(query_emb, emb)
-        scores.append((sent, score.item()))
+    matched_idx = I[0][0]
+    answer = corpus[matched_idx]
 
-    best = sorted(scores, key=lambda x: x[1], reverse=True)[:1]
-    if best and best[0][1] > 0.45:
-        answer_en = best[0][0]
-        answer_final = translate(answer_en, source="en", target=user_lang)
-    else:
-        answer_final = translate("No relevant answer found in knowledge base.", source="en", target=user_lang)
-
-    return answer_final
+    return translate_from_english(answer, input_lang)
