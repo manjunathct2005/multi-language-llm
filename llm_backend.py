@@ -1,81 +1,71 @@
 import os
-import glob
 import torch
-import faiss
-import re
-from langdetect import detect
+import glob
+from deep_translator import GoogleTranslator
 from sentence_transformers import SentenceTransformer, util
-from deep_translator import DeeplTranslator  # Replacing GoogleTranslator
 
-# === Configuration ===
-TRANSCRIPT_DIR = "my1"  # folder containing .txt files
-EMBEDDINGS_PATH = r"D:\hindupur_dataset\embeddings1.pt"
-MODEL_NAME = "all-MiniLM-L6-v2"
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+# Paths
+TRANSCRIPT_FOLDER = "my1"
+EMBEDDINGS_PATH = "D:/hindupur_dataset/embeddings1.pt"
 
-embedding_model = SentenceTransformer(MODEL_NAME, device=DEVICE)
+# Load model
+embed_model = SentenceTransformer('all-MiniLM-L6-v2')
 
-# === Load & Clean Text Files ===
-def load_transcripts():
-    texts, filenames = [], []
-    for filepath in glob.glob(os.path.join(TRANSCRIPT_DIR, "*.txt")):
+# Load and preprocess text
+def load_knowledge_base():
+    texts = []
+    file_list = glob.glob(os.path.join(TRANSCRIPT_FOLDER, "*.txt"))
+    for filepath in file_list:
         with open(filepath, "r", encoding="utf-8") as f:
-            text = f.read()
-            text = re.sub(r"(part\s*\d+|what is\s*data\s*science.*?:?)", "", text, flags=re.I)
-            text = re.sub(r"[^a-zA-Z0-9\s.,]", "", text)  # Remove unwanted characters
-            text = re.sub(r"\s+", " ", text)  # Normalize spacing
-            texts.append(text.strip())
-            filenames.append(os.path.basename(filepath))
-    return texts, filenames
+            raw = f.read()
+            cleaned = clean_text(raw)
+            texts.append(cleaned)
+    return texts
 
-# === Embedding Loader/Saver ===
-def get_embeddings():
+# Simple cleaning
+def clean_text(text):
+    lines = text.splitlines()
+    cleaned = []
+    for line in lines:
+        line = line.strip()
+        if line and not line.lower().startswith(("part", "#", "what is", "introduction", "page")):
+            cleaned.append(line)
+    return " ".join(cleaned)
+
+# Embed texts once and save
+def get_embeddings(texts):
     if os.path.exists(EMBEDDINGS_PATH):
-        return torch.load(EMBEDDINGS_PATH)
-    texts, _ = load_transcripts()
-    embeddings = embedding_model.encode(texts, convert_to_tensor=True, show_progress_bar=True)
-    torch.save(embeddings, EMBEDDINGS_PATH)
-    return embeddings
+        data = torch.load(EMBEDDINGS_PATH)
+        return data['texts'], data['embeddings']
+    embeddings = embed_model.encode(texts, convert_to_tensor=True)
+    torch.save({"texts": texts, "embeddings": embeddings}, EMBEDDINGS_PATH)
+    return texts, embeddings
 
-# === Translation Functions ===
-def translate_to_english(text):
+# Translate question and answer
+def translate(text, src, tgt):
     try:
-        return DeeplTranslator(source="auto", target="en").translate(text)
+        return GoogleTranslator(source=src, target=tgt).translate(text)
     except:
         return text
 
-def translate_from_english(text, target_lang):
-    if target_lang.lower().startswith("en"):
-        return text
+# Detect language (simple trick)
+def detect_lang(text):
     try:
-        return DeeplTranslator(source="en", target=target_lang).translate(text)
+        return GoogleTranslator(source='auto', target='en').translate(text), GoogleTranslator(source='auto', target='en').source
     except:
-        return text
+        return text, 'en'
 
-# === Answer a Question ===
-def answer_question(question_or_audio):
-    if isinstance(question_or_audio, str):
-        return process_question(question_or_audio)
-    else:
-        return "Audio input currently not supported in this backend version."
+# Answer function
+def answer_question(query):
+    query_translated, lang = detect_lang(query)
+    texts = load_knowledge_base()
+    if not texts:
+        return "⚠️ No valid knowledge base found."
 
-def process_question(question):
-    texts, filenames = load_transcripts()
-    embeddings = get_embeddings()
-
-    original_lang = detect(question)
-    translated_q = translate_to_english(question)
-
-    q_embedding = embedding_model.encode(translated_q, convert_to_tensor=True)
-    scores = util.pytorch_cos_sim(q_embedding, embeddings)[0]
-
+    texts, embeddings = get_embeddings(texts)
+    query_embedding = embed_model.encode(query_translated, convert_to_tensor=True)
+    scores = util.pytorch_cos_sim(query_embedding, embeddings)[0]
     best_idx = torch.argmax(scores).item()
-    answer_raw = texts[best_idx]
-    answer = answer_raw.strip()[:1000]  # limit response size
-
-    translated_ans = translate_from_english(answer, original_lang)
-    return translated_ans
-
-# === Load Available Languages ===
-def load_available_languages():
-    return ["en", "hi", "te", "kn", "ta", "ml", "ur"]
+    best_match = texts[best_idx]
+    final_answer = translate(best_match, src='en', tgt=lang)
+    return final_answer
