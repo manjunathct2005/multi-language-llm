@@ -1,50 +1,105 @@
+# llm_backend.py
+
 import os
-import nltk
-from nltk.tokenize import sent_tokenize
-from sentence_transformers import SentenceTransformer, util
+import glob
 import torch
+import numpy as np
+import re
+from deep_translator import DeeplTranslator
+from langdetect import detect
+from sentence_transformers import SentenceTransformer, util
+import faiss
 
-# ✅ Download NLTK 'punkt' tokenizer if not already available
-try:
-    nltk.data.find("tokenizers/punkt")
-except LookupError:
-    nltk.download("punkt")
+# === Configuration ===
+TRANSCRIPT_DIR = "my1"  # Folder with your .txt files
+MODEL_NAME = "all-MiniLM-L6-v2"
+EMBEDDINGS_PATH = os.path.join("D:/hindupur_dataset", "embeddings1.pt")
 
-# ✅ Load transcripts from folder
-def load_transcripts(transcript_folder="my1"):
+# === Load the embedding model ===
+embedding_model = SentenceTransformer(MODEL_NAME)
+
+# === Translation ===
+def translate_to_english(text):
+    try:
+        return DeeplTranslator(source='auto', target='en').translate(text)
+    except:
+        return text
+
+def translate_from_english(text, lang):
+    if lang == "en":
+        return text
+    try:
+        return DeeplTranslator(source='en', target=lang).translate(text)
+    except:
+        return text
+
+# === Clean each line ===
+def clean_text(text):
+    lines = text.splitlines()
+    cleaned = []
+    for line in lines:
+        line = line.strip()
+
+        # Skip empty or short lines
+        if len(line.split()) < 4:
+            continue
+
+        # Remove headers like "Part 1", "Module 3", "Section 4", etc.
+        if re.match(r'^(part|chapter|module|section|page)[\s\d:.-]*$', line.lower()):
+            continue
+
+        # Remove headings like "What is Data Science", "Overview"
+        if re.match(r'^(what is|overview|definition|introduction)', line.lower()):
+            continue
+
+        # Remove markdown symbols and unwanted characters
+        line = re.sub(r'[#*:\-•►●]', '', line)
+        line = re.sub(r'\s+', ' ', line)
+
+        cleaned.append(line)
+    return "\n".join(cleaned)
+
+# === Load and clean all text files ===
+def load_texts_and_embeddings():
+    if os.path.exists(EMBEDDINGS_PATH):
+        print("✅ Loading existing embeddings")
+        data = torch.load(EMBEDDINGS_PATH)
+        return data['texts'], data['index'], data['embeddings']
+
+    print("🔍 Generating new embeddings...")
     texts = []
-    if not os.path.exists(transcript_folder):
-        print(f"[INFO] Transcript folder not found: {transcript_folder}")
-        return []
+    for filepath in glob.glob(os.path.join(TRANSCRIPT_DIR, "*.txt")):
+        with open(filepath, "r", encoding="utf-8") as f:
+            text = f.read()
+            clean = clean_text(text)
+            if clean.strip():
+                texts.append(clean)
 
-    for filename in os.listdir(transcript_folder):
-        if filename.endswith(".txt"):
-            with open(os.path.join(transcript_folder, filename), "r", encoding="utf-8") as f:
-                content = f.read().strip()
-                if content:
-                    texts.append(content)
-    return texts
+    embeddings = embedding_model.encode(texts, convert_to_tensor=False)
+    embeddings_np = np.array(embeddings).astype("float32")
 
-# ✅ Load transcripts once at startup so app.py can import
-texts = load_transcripts()
+    index = faiss.IndexFlatL2(embeddings_np.shape[1])
+    index.add(embeddings_np)
 
-# ✅ Answer question by finding the best matching content
-def answer_question(question, texts):
-    if not texts:
-        return "⚠️ No transcript data found."
+    torch.save({'texts': texts, 'index': index, 'embeddings': embeddings_np}, EMBEDDINGS_PATH)
+    return texts, index, embeddings_np
 
-    model = SentenceTransformer("all-MiniLM-L6-v2")
+# === Detect language ===
+def detect_language(text):
+    try:
+        return detect(text)
+    except:
+        return "en"
 
-    # Combine all texts and tokenize
-    full_text = " ".join(texts).replace("\n", " ")
-    sentences = sent_tokenize(full_text)
+# === Process question ===
+def process_input(user_input, texts, index):
+    lang = detect_language(user_input)
+    question_en = translate_to_english(user_input)
+    query_vec = embedding_model.encode([question_en])[0].astype("float32")
 
-    sentence_embeddings = model.encode(sentences, convert_to_tensor=True)
-    question_embedding = model.encode(question, convert_to_tensor=True)
+    D, I = index.search(np.array([query_vec]), k=1)
+    if D[0][0] > 1.2:  # distance threshold
+        return translate_from_english("Sorry, I couldn't find a relevant answer.", lang)
 
-    similarities = util.cos_sim(question_embedding, sentence_embeddings)[0]
-    top_k = torch.topk(similarities, k=3)
-
-    # Combine top 3 similar answers
-    top_answers = [sentences[idx] for idx in top_k.indices]
-    return " ".join(top_answers)
+    best_answer = texts[I[0][0]]
+    return translate_from_english(best_answer, lang)
