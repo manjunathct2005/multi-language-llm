@@ -6,34 +6,27 @@ from googletrans import Translator
 from sentence_transformers import SentenceTransformer, util
 
 # === CONFIG ===
-TEXT_FOLDER = "D:/llm project/my1"  # Change if needed
-EMBEDDING_FILE = "D:/llm project/embeddings1.pt"
-MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
+TEXT_FOLDER = "my1"
+EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 
-# === Load model ===
-model = SentenceTransformer(MODEL_NAME)
+# === LOAD MODEL ===
+model = SentenceTransformer(EMBEDDING_MODEL)
 
-# === Load or compute embeddings ===
-def load_knowledge_base():
-    texts, files = [], []
-    for fname in os.listdir(TEXT_FOLDER):
-        if fname.endswith(".txt"):
-            path = os.path.join(TEXT_FOLDER, fname)
-            with open(path, "r", encoding="utf-8") as f:
-                content = f.read().strip()
-                texts.append(content)
-                files.append(fname)
+# === LOAD & EMBED DOCUMENTS ===
+documents = []
+file_names = []
 
-    embeddings = model.encode(texts, convert_to_tensor=True, show_progress_bar=True)
-    return texts, embeddings, files
+for fname in os.listdir(TEXT_FOLDER):
+    if fname.endswith(".txt"):
+        path = os.path.join(TEXT_FOLDER, fname)
+        with open(path, "r", encoding="utf-8") as f:
+            text = f.read()
+            documents.append(text)
+            file_names.append(fname)
 
-if os.path.exists(EMBEDDING_FILE):
-    kb_texts, kb_embeddings, kb_files = torch.load(EMBEDDING_FILE)
-else:
-    kb_texts, kb_embeddings, kb_files = load_knowledge_base()
-    torch.save((kb_texts, kb_embeddings, kb_files), EMBEDDING_FILE)
+document_embeddings = model.encode(documents, convert_to_tensor=True)
 
-# === Translator ===
+# === TRANSLATOR ===
 translator = Translator()
 
 def detect_language(text):
@@ -42,27 +35,28 @@ def detect_language(text):
     except:
         return "en"
 
-def translate_to_english(text):
-    lang = detect_language(text)
-    if lang != "en":
-        return translator.translate(text, src=lang, dest="en").text, lang
-    return text, "en"
+def translate_to_english(text, lang):
+    if lang == "en":
+        return text
+    return translator.translate(text, src=lang, dest="en").text
 
-def translate_from_english(text, target_lang):
-    if target_lang != "en":
-        return translator.translate(text, src="en", dest=target_lang).text
-    return text
+def translate_back(text, lang):
+    if lang == "en":
+        return text
+    return translator.translate(text, src="en", dest=lang).text
 
-# === Answer search ===
 def search_answer(query):
-    query_en, original_lang = translate_to_english(query)
+    input_lang = detect_language(query)
+    query_en = translate_to_english(query, input_lang)
+    
     query_embedding = model.encode(query_en, convert_to_tensor=True)
-    scores = util.pytorch_cos_sim(query_embedding, kb_embeddings)[0]
-    top_idx = torch.argmax(scores).item()
-    best_score = scores[top_idx].item()
+    scores = util.cos_sim(query_embedding, document_embeddings)[0]
 
-    if best_score < 0.4:
-        return translate_from_english("Sorry, I couldn't find a relevant answer.", original_lang)
+    best_idx = torch.argmax(scores).item()
+    best_score = scores[best_idx].item()
 
-    response = kb_texts[top_idx]
-    return translate_from_english(response, original_lang)
+    if best_score < 0.3:
+        return translate_back("Sorry, I couldn't find a good answer.", input_lang)
+
+    best_answer = documents[best_idx]
+    return translate_back(best_answer.strip(), input_lang)
