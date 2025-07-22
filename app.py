@@ -1,24 +1,32 @@
 import streamlit as st
-from llm_backend import load_transcripts, get_answer
+from llm_backend import answer_question, texts
 
-st.set_page_config(page_title="Multilingual Q&A App", layout="wide")
+# Page setup
+st.set_page_config(page_title="🧠 Multilingual Q&A", layout="centered")
+st.markdown("<h2 style='text-align:center;'>💬 Chat-Style Q&A (No Models)</h2>", unsafe_allow_html=True)
 
-st.title("🌍 Multilingual Knowledge Assistant")
-st.markdown("Ask questions in English, Hindi, Telugu, or Kannada. The system will answer in your language.")
+# Session state for conversation history
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = []
 
-# Load data
-with st.spinner("🔄 Loading knowledge base..."):
-    texts, embeddings = load_transcripts()
+# Input box for user query
+user_input = st.text_area("Ask a question (in any language):", height=100, placeholder="Type your question here...")
 
-# User Input
-query = st.text_input("❓ Ask your question:", placeholder="Type here in your language")
+# Handle submit
+if st.button("🔍 Get Answer"):
+    if user_input.strip():
+        # Get the answer
+        answer = answer_question(user_input.strip(), texts)
 
-if st.button("🔍 Get Answer") and query.strip():
-    with st.spinner("🧠 Generating answer..."):
-        try:
-            response = get_answer(query, texts, embeddings)
-            st.success("✅ Answer:")
-            st.write(response)
-        except Exception as e:
-            st.error("❌ Failed to generate answer.")
-            st.exception(e)
+        # Save in session history
+        st.session_state.chat_history.append(("You", user_input.strip()))
+        st.session_state.chat_history.append(("Bot", answer))
+    else:
+        st.warning("❗ Please enter a question before submitting.")
+
+# Display chat history
+for role, msg in st.session_state.chat_history:
+    if role == "You":
+        st.markdown(f"**🧑‍💬 You:** {msg}")
+    else:
+        st.markdown(f"**🤖 Bot:** {msg}")
