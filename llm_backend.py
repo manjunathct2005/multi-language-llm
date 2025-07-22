@@ -43,7 +43,7 @@ def clean_text(text):
     return " ".join(cleaned)
 
 # Load knowledge base
-def load_knowledge_base(transcript_folder="transcript_texts"):
+def load_knowledge_base(transcript_folder="my1"):
     texts, embeddings = [], []
     for file in glob.glob(os.path.join(transcript_folder, "*.txt")):
         with open(file, "r", encoding="utf-8") as f:
