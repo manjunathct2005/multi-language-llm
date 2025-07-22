@@ -1,55 +1,79 @@
 import os
 import torch
-from transformers import pipeline
-from sentence_transformers import SentenceTransformer
-from sklearn.metrics.pairwise import cosine_similarity
-from deep_translator import GoogleTranslator
+import faiss
+import numpy as np
 from langdetect import detect
+from googletrans import Translator
+from sentence_transformers import SentenceTransformer
 
-# Use your own folder containing `.txt` files
-TEXT_FOLDER = "my1"
+# === CONFIG ===
+TEXT_FOLDER = r"D:\llm project\my1"
+MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
+translator = Translator()
 
-# Load and embed all paragraphs
-def load_transcripts(folder):
-    texts, sources = [], []
-    for filename in os.listdir(folder):
-        if filename.endswith(".txt"):
-            path = os.path.join(folder, filename)
-            with open(path, "r", encoding="utf-8") as f:
-                paragraphs = f.read().split("\n\n")
-                for para in paragraphs:
-                    if para.strip():
-                        texts.append(para.strip())
-                        sources.append(filename)
-    return texts, sources
+# === Load Embedding Model ===
+embedding_model = SentenceTransformer(MODEL_NAME)
 
-texts, sources = load_transcripts(TEXT_FOLDER)
-embedder = SentenceTransformer("all-MiniLM-L6-v2")
-text_embeddings = embedder.encode(texts, convert_to_tensor=True)
+# === Load Knowledge Base ===
+corpus = []
+file_names = []
 
-# Summarization model for answer
-qa_pipeline = pipeline("summarization", model="sshleifer/distilbart-cnn-12-6")
+for file in os.listdir(TEXT_FOLDER):
+    if file.endswith(".txt"):
+        file_path = os.path.join(TEXT_FOLDER, file)
+        with open(file_path, "r", encoding="utf-8") as f:
+            lines = [line.strip() for line in f.readlines() if line.strip()]
+            corpus.extend(lines)
+            file_names.extend([file] * len(lines))
 
-def translate_to_en(text):
-    lang = detect(text)
-    if lang != "en":
-        return GoogleTranslator(source="auto", target="en").translate(text)
-    return text
+# === Generate Embeddings ===
+corpus_embeddings = embedding_model.encode(corpus, convert_to_tensor=False)
+corpus_embeddings = np.array(corpus_embeddings).astype("float32")
 
-def process_input(query):
-    original_lang = detect(query)
-    translated_query = translate_to_en(query)
+# === Create FAISS Index ===
+dimension = corpus_embeddings.shape[1]
+index = faiss.IndexFlatL2(dimension)
+index.add(corpus_embeddings)
 
-    query_embedding = embedder.encode(translated_query, convert_to_tensor=True)
-    similarities = cosine_similarity([query_embedding], text_embeddings)[0]
+# === Language Utilities ===
+def detect_language(text):
+    try:
+        return detect(text)
+    except:
+        return "en"  # fallback to English
 
-    top_idx = similarities.argsort()[-3:][::-1]
-    top_paragraphs = [texts[i] for i in top_idx]
-    top_text = "\n\n".join(top_paragraphs)
+def translate(text, src, dest):
+    if src == dest:
+        return text
+    try:
+        return translator.translate(text, src=src, dest=dest).text
+    except:
+        return text
 
-    summary = qa_pipeline(top_text, max_length=200, min_length=50, do_sample=False)[0]["summary_text"]
+# === Search Function ===
+def search_embeddings(query, top_k=3):
+    query_embedding = embedding_model.encode([query])[0].astype("float32")
+    distances, indices = index.search(np.array([query_embedding]), top_k)
+    
+    results = []
+    for idx in indices[0]:
+        if idx < len(corpus):
+            results.append(corpus[idx])
+    
+    # Format the answer as clean paragraphs
+    return "\n\n".join(f"• {r}" for r in results if r.strip())
 
-    if original_lang != "en":
-        summary = GoogleTranslator(source="en", target=original_lang).translate(summary)
+# === Main Entry Point ===
+def process_input(user_input):
+    input_lang = detect_language(user_input)
+    
+    # Step 1: Translate to English for semantic search
+    user_input_en = translate(user_input, src=input_lang, dest='en')
+    
+    # Step 2: Retrieve answer from KB
+    answer_en = search_embeddings(user_input_en)
+    
+    # Step 3: Translate back to original language (if needed)
+    final_answer = translate(answer_en, src='en', dest=input_lang)
 
-    return f"**Answer:**\n\n{summary}\n\n---\n**Sources:** {', '.join(set([sources[i] for i in top_idx]))}"
+    return final_answer or "❌ Sorry, no relevant answer found in your documents."
