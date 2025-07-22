@@ -3,12 +3,13 @@ import torch
 from sklearn.neighbors import NearestNeighbors
 from sentence_transformers import SentenceTransformer
 from langdetect import detect
-from deep_translator import GoogleTranslator
+from deep_translator import GoogleTranslator, exceptions as dt_exceptions
 
 # Paths
 TRANSCRIPTS_DIR = "my1"
-EMBEDDINGS_PATH = "embeddings1.pt"
+EMBEDDINGS_PATH = "D:/hindupur_dataset/embeddings1.pt"
 
+# Load embedding model
 embedding_model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
 
 def clean_text(text):
@@ -30,47 +31,49 @@ def load_texts_and_embeddings():
                 texts.append(clean_text(content))
 
     if os.path.exists(EMBEDDINGS_PATH):
-        try:
-            embeddings = torch.load(EMBEDDINGS_PATH)
-        except Exception as e:
-            print(f"Error loading embeddings: {e}")
-            embeddings = embedding_model.encode(texts, show_progress_bar=True)
-            torch.save(embeddings, EMBEDDINGS_PATH)
+        embeddings = torch.load(EMBEDDINGS_PATH)
     else:
         embeddings = embedding_model.encode(texts, show_progress_bar=True)
         torch.save(embeddings, EMBEDDINGS_PATH)
 
     return texts, embeddings
 
-def detect_language(text):
+def translate_to_english(text):
     try:
-        return detect(text)
-    except:
-        return "en"
-
-def translate_to_english(text, src_lang):
-    if src_lang != "en":
-        return GoogleTranslator(source=src_lang, target="en").translate(text)
-    return text
+        lang = detect(text)
+        if lang != "en":
+            return GoogleTranslator(source=lang, target="en").translate(text), lang
+        else:
+            return text, "en"
+    except dt_exceptions.NotValidPayload:
+        return text, "en"
+    except Exception:
+        return text, "en"
 
 def translate_from_english(text, target_lang):
-    if target_lang != "en":
+    try:
+        if len(text) > 4900:
+            text = text[:4900]
         return GoogleTranslator(source="en", target=target_lang).translate(text)
-    return text
+    except dt_exceptions.NotValidLength:
+        return text
+    except Exception:
+        return text
 
-def get_answer(question, texts, embeddings, top_k=3):
-    question_lang = detect_language(question)
-    question_en = translate_to_english(question, question_lang)
+def get_answer(question, texts, embeddings):
+    question_emb = embedding_model.encode([question])
+    knn = NearestNeighbors(n_neighbors=3, metric="cosine").fit(embeddings)
+    _, indices = knn.kneighbors(question_emb)
 
-    question_embedding = embedding_model.encode([question_en])
-    knn = NearestNeighbors(n_neighbors=top_k, metric="cosine")
-    knn.fit(embeddings)
-    distances, indices = knn.kneighbors(question_embedding)
+    matched_texts = [texts[i] for i in indices[0]]
+    combined_answer = "\n".join(matched_texts)
 
-    results = [texts[idx] for idx in indices[0]]
-    combined_answer = " ".join(results)
-    return translate_from_english(combined_answer, question_lang)
+    question_lang = detect(question)
+    if question_lang != "en":
+        return translate_from_english(combined_answer, question_lang)
+    else:
+        return combined_answer
 
-# ✅ Add this function so app.py works
 def process_input(question, texts, embeddings):
-    return get_answer(question, texts, embeddings)
+    question_en, lang = translate_to_english(question)
+    return get_answer(question_en, texts, embeddings)
