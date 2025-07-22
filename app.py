@@ -1,47 +1,39 @@
-# app.py
-
 import os
 import streamlit as st
 from llm_backend import process_input, knowledge_base, detect_language
 
 st.set_page_config(page_title="Multilingual Knowledge Base Assistant", layout="centered")
-
-# Initialize
-TRANSCRIPT_DIR = "D:/hindupur_dataset/transcripts"
-SUPPORTED_LANGUAGES = ["en", "hi", "te"]
-
-# Load knowledge base
-texts, index, embeddings = knowledge_base(TRANSCRIPT_DIR)
-num_blocks = len(texts)
-
-# Header
-st.markdown("## 💡 Multilingual Knowledge Base Assistant")
+st.title("💡 Multilingual Knowledge Base Assistant")
 st.markdown("Ask in **Telugu**, **Hindi**, **Kannada**, or **English**. Clean answers from `.txt` transcripts.")
 
-# Knowledge base status
-if num_blocks > 0:
-    st.success(f"✅ Loaded {num_blocks} knowledge blocks from `{TRANSCRIPT_DIR}`.")
-else:
-    st.warning("⚠️ No knowledge blocks found. Please add `.txt` transcripts.")
+# Load knowledge base
+with st.spinner("Loading knowledge base..."):
+    texts, index, embeddings = knowledge_base()
+st.success(f"Knowledge base loaded ✅ ({len(texts)} blocks)")
 
-# Input box
-query = st.text_input("🔎 Ask your question here:")
+# Input section
+st.markdown("### 🔎 Ask your question here:")
+user_query = st.text_input("", placeholder="Ask your question...")
 
-# Response style
+# Response style toggle
 st.markdown("#### 📝 Response Style:")
-response_style = st.radio("", ["Summary", "Detailed (Chat-style)"], horizontal=True)
+style = st.radio("", ["Summary", "Detailed (Chat-style)"], index=0)
 
 # Submit button
 if st.button("🚀 Get Answer"):
-
-    if not query.strip():
-        st.error("❌ Please enter a valid question.")
+    if user_query.strip() == "":
+        st.warning("Please enter a question.")
     else:
-        detected_lang = detect_language(query)
+        lang = detect_language(user_query)
 
-        if detected_lang not in SUPPORTED_LANGUAGES:
-            st.error("❌ Only Telugu/English/Hindi questions are supported.")
+        if lang not in ["en", "hi", "te", "kn"]:
+            st.error("❌ Only Telugu/English/Hindi/Kannada questions are supported.")
         else:
-            result = process_input(query, texts, index, embeddings, detected_lang, style=response_style)
+            with st.spinner("Processing your question..."):
+                answer = process_input(user_query, style.lower(), texts, index, embeddings, lang)
             st.markdown("### ✅ Answer:")
-            st.write(result)
+            st.write(answer)
+
+# Footer
+st.markdown("---")
+st.markdown("🔍 *Only `.txt` files from the knowledge base folder are used. Offline, multilingual QA.*")
