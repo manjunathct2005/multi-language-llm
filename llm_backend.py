@@ -1,78 +1,79 @@
-# llm_backend.py
 import os
 import re
+import faiss
 import torch
 import numpy as np
-import faiss
 from langdetect import detect
+from deep_translator import MyMemoryTranslator
 from sentence_transformers import SentenceTransformer
-from googletrans import Translator
 
 # === CONFIG ===
 TEXT_FOLDER = r"D:\llm project\my1"
-EMBEDDING_DIM = 384
-MODEL_NAME = "all-MiniLM-L6-v2"
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 
-# === LOAD EMBEDDING MODEL ===
-model = SentenceTransformer(MODEL_NAME, device=DEVICE)
+# === Load Model ===
+model = SentenceTransformer(EMBEDDING_MODEL)
 
-# === LOAD FILES ===
-def clean_text(text):
-    lines = text.splitlines()
-    seen = set()
-    cleaned = []
-    for line in lines:
-        line = line.strip()
-        if len(line) > 1 and line not in seen:
-            seen.add(line)
-            cleaned.append(line)
-    return " ".join(cleaned)
-
-texts, filenames = [], []
-for fname in os.listdir(TEXT_FOLDER):
-    if fname.endswith(".txt"):
-        with open(os.path.join(TEXT_FOLDER, fname), "r", encoding="utf-8") as f:
-            content = f.read().strip()
-            cleaned = clean_text(content)
-            texts.append(cleaned)
-            filenames.append(fname)
-
-# === BUILD EMBEDDING INDEX ===
-embeddings = model.encode(texts, convert_to_tensor=False, normalize_embeddings=True)
-index = faiss.IndexFlatIP(EMBEDDING_DIM)
-index.add(np.array(embeddings))
-
-# === TRANSLATOR ===
-translator = Translator()
-
-def detect_language(text):
+# === Translation Helpers ===
+def translate_to_english(text):
     try:
-        return detect(text)
-    except:
-        return "en"
-
-def translate(text, src, dest):
-    try:
-        return translator.translate(text, src=src, dest=dest).text
+        return MyMemoryTranslator(source='auto', target='en').translate(text)
     except:
         return text
 
+def translate_from_english(text, target_lang):
+    try:
+        return MyMemoryTranslator(source='en', target=target_lang).translate(text)
+    except:
+        return text
+
+# === Cleaning ===
+def clean_text(text):
+    text = re.sub(r"\n+", ". ", text)
+    text = re.sub(r"\s{2,}", " ", text)
+    text = re.sub(r"\.{2,}", ".", text)
+    return text.strip()
+
+# === Chunking ===
+def chunk_text(text, max_length=500):
+    words = text.split()
+    return [' '.join(words[i:i+max_length]) for i in range(0, len(words), max_length)]
+
+# === Load & Embed Files ===
+def load_chunks_and_embeddings():
+    all_chunks, sources = [], []
+    for filename in os.listdir(TEXT_FOLDER):
+        if filename.endswith(".txt"):
+            filepath = os.path.join(TEXT_FOLDER, filename)
+            with open(filepath, "r", encoding="utf-8") as f:
+                text = clean_text(f.read())
+                chunks = chunk_text(text)
+                all_chunks.extend(chunks)
+                sources.extend([filename] * len(chunks))
+    if not all_chunks:
+        return [], [], None
+    embeddings = model.encode(all_chunks, convert_to_tensor=False, normalize_embeddings=True)
+    index = faiss.IndexFlatL2(embeddings[0].shape[0])
+    index.add(np.array(embeddings))
+    return all_chunks, sources, index
+
+CHUNKS, SOURCES, INDEX = load_chunks_and_embeddings()
+
+# === Q&A ===
 def answer_question(query):
-    original_lang = detect_language(query)
-    query_en = translate(query, src=original_lang, dest="en")
+    if not CHUNKS or not INDEX:
+        return "⚠️ No knowledge base found. Please upload .txt files."
 
+    original_lang = detect(query)
+    query_en = translate_to_english(query)
     q_embed = model.encode([query_en], convert_to_tensor=False, normalize_embeddings=True)
-    D, I = index.search(np.array(q_embed), k=1)
+    top_k = 3
+    _, indices = INDEX.search(np.array(q_embed), top_k)
 
-    if D[0][0] < 0.3:
-        return translate("Sorry, I couldn't find an answer.", src="en", dest=original_lang)
+    matched_chunks = [CHUNKS[i] for i in indices[0]]
+    answer_en = "\n\n".join(matched_chunks)
 
-    matched_text = texts[I[0][0]]
-    answer_en = highlight_answer(matched_text, query_en)
-    final_answer = translate(answer_en, src="en", dest=original_lang)
-    return final_answer
+    if not answer_en.strip():
+        return translate_from_english("Sorry, I could not find an answer.", original_lang)
 
-def highlight_answer(text, query):
-    pattern = re.compile(re.escape(query), re.IGNORECASE)
-    return pattern.sub(r'<span style="color:red"><b>\g<0></b></span>', text)
+    return translate_from_english(answer_en, original_lang)
