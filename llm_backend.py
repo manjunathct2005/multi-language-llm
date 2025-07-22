@@ -1,79 +1,67 @@
 import os
-import re
-import faiss
-import torch
 import numpy as np
-from langdetect import detect
-from deep_translator import MyMemoryTranslator
 from sentence_transformers import SentenceTransformer
+from sklearn.metrics.pairwise import cosine_similarity
+import faiss
+from langdetect import detect
+from deep_translator import GoogleTranslator
 
-# === CONFIG ===
 TEXT_FOLDER = r"D:\llm project\my1"
-EMBEDDING_MODEL = "all-MiniLM-L6-v2"
+MODEL_NAME = "sentence-transformers/distiluse-base-multilingual-cased-v1"
+model = SentenceTransformer(MODEL_NAME)
 
-# === Load Model ===
-model = SentenceTransformer(EMBEDDING_MODEL)
-
-# === Translation Helpers ===
-def translate_to_english(text):
-    try:
-        return MyMemoryTranslator(source='auto', target='en').translate(text)
-    except:
-        return text
-
-def translate_from_english(text, target_lang):
-    try:
-        return MyMemoryTranslator(source='en', target=target_lang).translate(text)
-    except:
-        return text
-
-# === Cleaning ===
-def clean_text(text):
-    text = re.sub(r"\n+", ". ", text)
-    text = re.sub(r"\s{2,}", " ", text)
-    text = re.sub(r"\.{2,}", ".", text)
-    return text.strip()
-
-# === Chunking ===
-def chunk_text(text, max_length=500):
-    words = text.split()
-    return [' '.join(words[i:i+max_length]) for i in range(0, len(words), max_length)]
-
-# === Load & Embed Files ===
-def load_chunks_and_embeddings():
-    all_chunks, sources = [], []
+# Load all text files as knowledge base
+def load_knowledge_base():
+    documents = []
+    file_names = []
     for filename in os.listdir(TEXT_FOLDER):
         if filename.endswith(".txt"):
-            filepath = os.path.join(TEXT_FOLDER, filename)
-            with open(filepath, "r", encoding="utf-8") as f:
-                text = clean_text(f.read())
-                chunks = chunk_text(text)
-                all_chunks.extend(chunks)
-                sources.extend([filename] * len(chunks))
-    if not all_chunks:
-        return [], [], None
-    embeddings = model.encode(all_chunks, convert_to_tensor=False, normalize_embeddings=True)
-    index = faiss.IndexFlatL2(embeddings[0].shape[0])
-    index.add(np.array(embeddings))
-    return all_chunks, sources, index
+            path = os.path.join(TEXT_FOLDER, filename)
+            with open(path, "r", encoding="utf-8") as f:
+                content = f.read().strip()
+                if content:
+                    documents.append(content)
+                    file_names.append(filename)
+    embeddings = model.encode(documents, show_progress_bar=True)
+    index = faiss.IndexFlatL2(embeddings.shape[1])
+    index.add(np.array(embeddings).astype("float32"))
+    return documents, index, embeddings
 
-CHUNKS, SOURCES, INDEX = load_chunks_and_embeddings()
+DOCUMENTS, INDEX, EMBEDDINGS = load_knowledge_base()
 
-# === Q&A ===
-def answer_question(query):
-    if not CHUNKS or not INDEX:
-        return "⚠️ No knowledge base found. Please upload .txt files."
+# Translate question to English
+def translate_to_english(text):
+    lang = detect(text)
+    if lang != "en":
+        try:
+            return GoogleTranslator(source='auto', target='en').translate(text), lang
+        except:
+            return text, lang
+    return text, "en"
 
-    original_lang = detect(query)
-    query_en = translate_to_english(query)
-    q_embed = model.encode([query_en], convert_to_tensor=False, normalize_embeddings=True)
-    top_k = 3
-    _, indices = INDEX.search(np.array(q_embed), top_k)
+# Translate English answer back to original language
+def translate_back(text, target_lang):
+    if target_lang != "en":
+        try:
+            return GoogleTranslator(source='en', target=target_lang).translate(text)
+        except:
+            return text
+    return text
 
-    matched_chunks = [CHUNKS[i] for i in indices[0]]
-    answer_en = "\n\n".join(matched_chunks)
+# Main function to generate response
+def answer_question(user_question, top_k=1):
+    try:
+        question_en, orig_lang = translate_to_english(user_question)
+        question_vector = model.encode([question_en])
+        D, I = INDEX.search(np.array(question_vector).astype("float32"), top_k)
 
-    if not answer_en.strip():
-        return translate_from_english("Sorry, I could not find an answer.", original_lang)
+        if I[0][0] < len(DOCUMENTS):
+            answer = DOCUMENTS[I[0][0]].strip()
+        else:
+            return translate_back("Sorry, no relevant answer found in your data.", orig_lang)
 
-    return translate_from_english(answer_en, original_lang)
+        final_answer = translate_back(answer, orig_lang)
+        return f"🔍 **Answer**:\n\n<span style='color:red'>{final_answer}</span>", orig_lang
+
+    except Exception as e:
+        return f"⚠️ Error: {str(e)}", "en"
