@@ -1,17 +1,15 @@
-
 import streamlit as st
-from llm_backend import answer_question, load_available_languages
+from llm_backend import answer_question
 
-st.set_page_config(page_title="Multilingual LLM App", layout="centered")
-st.title("🧠 Multilingual Q&A with Local Knowledge Base")
+st.set_page_config(page_title="📚 Smart Multilingual Q&A", layout="centered")
 
-question = st.text_input("Enter your question:")
-language = st.selectbox("Select your language:", load_available_languages())
+st.title("🤖 Multilingual Knowledge Assistant")
+st.markdown("Ask questions from your notes in **English, Hindi, Telugu, or Kannada.**")
 
-if st.button("Ask"):
-    if question.strip():
-        with st.spinner("Generating answer..."):
-            answer = answer_question(question, language)
-            st.success(f"Answer: {answer}")
-    else:
-        st.warning("Please enter a question.")
+user_input = st.text_input("💬 Enter your question", max_chars=500)
+
+if user_input:
+    with st.spinner("🔍 Searching..."):
+        response = answer_question(user_input)
+        st.markdown("---")
+        st.markdown(response, unsafe_allow_html=True)
