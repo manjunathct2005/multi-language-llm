@@ -1,49 +1,74 @@
 import os
 import torch
-from sentence_transformers import SentenceTransformer, util
+import glob
+import numpy as np
+from sentence_transformers import SentenceTransformer
 from langdetect import detect
-from deep_translator import GoogleTranslator
-import re
+from transformers import MBartForConditionalGeneration, MBart50TokenizerFast
 
-embedder = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+# Use local models only
+embedding_model = SentenceTransformer("models/sentence-transformers--all-MiniLM-L6-v2")
+translator_en = MBartForConditionalGeneration.from_pretrained("models/facebook--mbart-large-50-many-to-many-mmt")
+tokenizer_en = MBart50TokenizerFast.from_pretrained("models/facebook--mbart-large-50-many-to-many-mmt")
 
-def clean_text(text):
-    text = re.sub(r"http\S+", "", text)
-    text = re.sub(r"\s+", " ", text)
-    text = re.sub(r"[^\w\s.,!?]", "", text)
-    lines = list(set(text.split('.')))
-    return '. '.join([line.strip() for line in lines if len(line.strip()) > 20])
+transcript_folder = "D:/hindupur_dataset/transcripts"
+embedding_path = "D:/hindupur_dataset/embeddings.pt"
+index_path = "D:/hindupur_dataset/index.npy"
+texts_path = "D:/hindupur_dataset/texts.npy"
 
-def load_transcripts(transcript_dir="D:/hindupur_dataset/transcripts"):
-    texts, embeddings = [], []
-    for filename in os.listdir(transcript_dir):
-        if filename.endswith(".txt"):
-            with open(os.path.join(transcript_dir, filename), "r", encoding="utf-8") as f:
-                content = f.read()
-                cleaned = clean_text(content)
-                if cleaned:
-                    texts.append(cleaned)
-                    emb = embedder.encode(cleaned, convert_to_tensor=True)
-                    embeddings.append(emb)
-    return texts, embeddings
+def translate(text, src_lang, tgt_lang):
+    tokenizer_en.src_lang = src_lang
+    encoded = tokenizer_en(text, return_tensors="pt")
+    generated = translator_en.generate(**encoded, forced_bos_token_id=tokenizer_en.lang_code_to_id[tgt_lang])
+    return tokenizer_en.decode(generated[0], skip_special_tokens=True)
 
-def translate_to_en(text, src_lang):
-    if src_lang == "en":
-        return text
-    return GoogleTranslator(source=src_lang, target="en").translate(text)
+def load_transcripts():
+    txt_files = glob.glob(os.path.join(transcript_folder, "*.txt"))
+    texts = []
+    for file in txt_files:
+        with open(file, "r", encoding="utf-8", errors="ignore") as f:
+            lines = f.readlines()
+            cleaned = [line.strip() for line in lines if len(line.strip()) > 10]
+            texts.extend(cleaned)
+    return texts
 
-def translate_from_en(text, target_lang):
-    if target_lang == "en":
-        return text
-    return GoogleTranslator(source="en", target=target_lang).translate(text)
+def build_embeddings(texts):
+    embeddings = embedding_model.encode(texts, convert_to_tensor=True)
+    torch.save(embeddings, embedding_path)
+    np.save(texts_path, np.array(texts))
+    return embeddings
 
-def answer_question(question, texts, embeddings):
-    input_lang = detect(question)
-    question_en = translate_to_en(question, input_lang)
-    question_embedding = embedder.encode(question_en, convert_to_tensor=True)
+def load_embeddings():
+    if os.path.exists(embedding_path):
+        return torch.load(embedding_path)
+    return None
 
-    similarities = util.cos_sim(question_embedding, torch.stack(embeddings))[0]
-    best_idx = torch.argmax(similarities).item()
-    answer_en = texts[best_idx]
+def get_answer(query):
+    texts = np.load(texts_path, allow_pickle=True).tolist()
+    embeddings = load_embeddings()
 
-    return translate_from_en(answer_en, input_lang)
+    if embeddings is None or len(texts) == 0:
+        return "Knowledge base is empty."
+
+    input_lang = detect(query)
+    lang_map = {"en": "en_XX", "hi": "hi_IN", "te": "te_IN", "kn": "kn_IN"}
+
+    if input_lang != "en":
+        query_en = translate(query, lang_map[input_lang], "en_XX")
+    else:
+        query_en = query
+
+    query_embedding = embedding_model.encode([query_en], convert_to_tensor=True)
+    cosine_scores = torch.nn.functional.cosine_similarity(query_embedding, embeddings)
+    top_idx = torch.argmax(cosine_scores).item()
+    answer_en = texts[top_idx]
+
+    if input_lang != "en":
+        return translate(answer_en, "en_XX", lang_map[input_lang])
+    else:
+        return answer_en
+
+# Load on start
+if not os.path.exists(embedding_path):
+    texts = load_transcripts()
+    build_embeddings(texts)
