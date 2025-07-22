@@ -1,84 +1,71 @@
+# llm_backend.py
+
 import os
-import re
-import faiss
 import torch
 import numpy as np
+import faiss
+import re
 from langdetect import detect
 from deep_translator import GoogleTranslator
-from sentence_transformers import SentenceTransformer
+from sentence_transformers import SentenceTransformer, util
 
 # === CONFIG ===
-TEXT_FOLDER = "my1"  # Folder with .txt transcripts
-MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
-EMBEDDING_DIM = 384  # For MiniLM-L6-v2
+TEXT_FOLDER = r"D:\llm project\my1"  # Folder with text transcripts
+EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 
-# === Load model and data ===
-model = SentenceTransformer(MODEL_NAME)
-index = faiss.IndexFlatL2(EMBEDDING_DIM)
-sentence_map = []  # List of (sentence, source_file)
+# === Load model and initialize ===
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
+embedder = SentenceTransformer(EMBEDDING_MODEL, device=device)
 
+# === Load transcripts and create embeddings ===
 def clean_text(text):
-    """Remove duplicates, timestamps, and garbage lines."""
-    lines = text.split("\n")
-    cleaned = []
-    seen = set()
-    for line in lines:
-        line = line.strip()
-        if not line or len(line) < 5:
-            continue
-        line = re.sub(r"\[\d{2}:\d{2}:\d{2}\]", "", line)  # Remove timestamps
-        if line not in seen:
-            cleaned.append(line)
-            seen.add(line)
-    return cleaned
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
 
-def load_documents():
-    """Load and embed all text files from folder."""
-    for filename in os.listdir(TEXT_FOLDER):
-        if filename.endswith(".txt"):
-            path = os.path.join(TEXT_FOLDER, filename)
-            with open(path, "r", encoding="utf-8") as f:
-                text = f.read()
-            sentences = clean_text(text)
-            embeddings = model.encode(sentences, show_progress_bar=False)
-            index.add(np.array(embeddings).astype('float32'))
-            sentence_map.extend([(s, filename) for s in sentences])
+def load_knowledge_base(folder):
+    docs, filenames = [], []
+    for fname in os.listdir(folder):
+        if fname.endswith(".txt"):
+            with open(os.path.join(folder, fname), "r", encoding="utf-8") as f:
+                content = clean_text(f.read())
+                docs.append(content)
+                filenames.append(fname)
+    return docs, filenames
 
-# Preload on startup
-load_documents()
+def get_embeddings(texts):
+    return embedder.encode(texts, convert_to_tensor=True)
+
+print("📚 Loading knowledge base...")
+docs, filenames = load_knowledge_base(TEXT_FOLDER)
+doc_embeddings = get_embeddings(docs)
+print("✅ Knowledge base loaded with", len(docs), "documents.")
 
 # === Language Utilities ===
-def detect_language(text):
-    try:
-        return detect(text)
-    except:
-        return "en"
+def detect_lang(text):
+    return detect(text)
 
-def to_english(text, src_lang):
-    if src_lang == "en":
-        return text
-    return GoogleTranslator(source=src_lang, target="en").translate(text)
+def translate_to_en(text):
+    return GoogleTranslator(source='auto', target='en').translate(text)
 
-def from_english(text, target_lang):
-    if target_lang == "en":
-        return text
-    return GoogleTranslator(source="en", target=target_lang).translate(text)
-
-def load_available_languages():
-    """Return list of supported languages by name."""
-    return ["en", "hi", "te", "kn"]
+def translate_back(text, lang):
+    return GoogleTranslator(source='en', target=lang).translate(text)
 
 # === Main Answering Function ===
-def answer_question(question, top_k=1):
-    orig_lang = detect_language(question)
-    english_q = to_english(question, orig_lang)
+def get_answer(user_query):
+    try:
+        user_lang = detect_lang(user_query)
+        query_en = translate_to_en(user_query)
 
-    q_emb = model.encode([english_q])[0].astype('float32')
-    D, I = index.search(np.array([q_emb]), top_k)
+        query_embedding = embedder.encode(query_en, convert_to_tensor=True)
+        scores = util.pytorch_cos_sim(query_embedding, doc_embeddings)[0]
 
-    if I[0][0] == -1:
-        return from_english("Sorry, I couldn't find an answer.", orig_lang), None
+        top_k = min(1, len(scores))  # return only 1 best result
+        top_indices = torch.topk(scores, k=top_k)[1].tolist()
+        top_result = docs[top_indices[0]]
 
-    matched_sentence, source_file = sentence_map[I[0][0]]
-    final_answer = from_english(matched_sentence, orig_lang)
-    return final_answer, source_file
+        # Return translated answer
+        answer_final = translate_back(top_result, user_lang)
+        return answer_final
+
+    except Exception as e:
+        return f"❌ Error during answer generation: {str(e)}"
