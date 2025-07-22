@@ -1,33 +1,42 @@
 import os
 import streamlit as st
 
-# Check local module import
-try:
-    from llm_backend import answer_question, load_available_languages
-except ImportError:
-    st.error("❌ Failed to import llm_backend.py. Make sure it's in the same folder as app.py.")
-    st.stop()
-
+# UI Configuration
 st.set_page_config(page_title="Multilingual Q&A Tool", layout="centered")
 st.title("🌍 Multilingual Question Answering App")
 
-# Sidebar
-st.sidebar.header("Language Settings")
-supported_langs = load_available_languages()
-st.sidebar.markdown("Available languages: " + ", ".join(supported_langs))
+# Import backend
+try:
+    from llm_backend import answer_question, load_available_languages
+except ImportError:
+    st.error("❌ Could not import `llm_backend.py`. Please ensure it's in the same directory.")
+    st.stop()
 
-# Input
-query = st.text_input("Ask your question (in any language):")
+# Sidebar Language Info
+st.sidebar.header("Language Settings")
+try:
+    supported_langs = load_available_languages()
+    st.sidebar.markdown("✅ Supported: " + ", ".join(supported_langs))
+except Exception as e:
+    st.sidebar.error("❌ Could not load languages.")
+    supported_langs = []
+
+# Question Input
+query = st.text_input("❓ Ask your question (in English, Hindi, Telugu, Kannada):")
 
 if query:
-    with st.spinner("Searching for answer..."):
+    with st.spinner("🔍 Finding the best answer..."):
         try:
             answer, source = answer_question(query)
-            st.success("✅ Answer:")
-            st.write(answer)
-            st.caption(f"📁 Source file: {source}")
+            if answer:
+                st.success("✅ Answer:")
+                st.markdown(f"**{answer}**")
+                if source:
+                    st.caption(f"📁 From: `{source}`")
+            else:
+                st.warning("⚠️ No relevant answer found.")
         except Exception as e:
-            st.error(f"⚠️ Something went wrong: {str(e)}")
+            st.error(f"❌ Error during answering: {e}")
 
 st.markdown("---")
-st.caption("💡 English, Hindi, Telugu, Kannada supported. Local model, no API required.")
+st.caption("🤖 Powered by local models. No internet/API required.")
