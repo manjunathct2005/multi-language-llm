@@ -1,71 +1,70 @@
-# llm_backend.py
-
 import os
+import re
 import torch
 import numpy as np
-import faiss
-import re
 from langdetect import detect
-from deep_translator import GoogleTranslator
 from sentence_transformers import SentenceTransformer, util
+from argostranslate.package import install_from_path, get_available_packages
+from argostranslate.translate import load_installed_packages, translate
 
-# === CONFIG ===
-TEXT_FOLDER = r"D:\llm project\my1"  # Folder with text transcripts
-EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+# === PATH CONFIG ===
+TEXT_FOLDER = r"D:\llm project\my1"
+EMBEDDING_DIM = 384
+model = SentenceTransformer("all-MiniLM-L6-v2")
 
-# === Load model and initialize ===
-device = 'cuda' if torch.cuda.is_available() else 'cpu'
-embedder = SentenceTransformer(EMBEDDING_MODEL, device=device)
+# === TRANSLATION SETUP ===
+load_installed_packages()
 
-# === Load transcripts and create embeddings ===
+def install_lang_package(from_code, to_code):
+    packages = get_available_packages()
+    for pkg in packages:
+        if pkg.from_code == from_code and pkg.to_code == to_code:
+            install_from_path(pkg.download())
+
+# === Clean, Embed and Load Knowledge Base ===
 def clean_text(text):
-    text = re.sub(r"\s+", " ", text)
+    text = re.sub(r'\s+', ' ', text)
     return text.strip()
 
-def load_knowledge_base(folder):
-    docs, filenames = [], []
-    for fname in os.listdir(folder):
+def load_knowledge_base():
+    texts = []
+    embeddings = []
+    for fname in os.listdir(TEXT_FOLDER):
         if fname.endswith(".txt"):
-            with open(os.path.join(folder, fname), "r", encoding="utf-8") as f:
+            path = os.path.join(TEXT_FOLDER, fname)
+            with open(path, "r", encoding="utf-8") as f:
                 content = clean_text(f.read())
-                docs.append(content)
-                filenames.append(fname)
-    return docs, filenames
+                if content:
+                    texts.append(content)
+                    embeddings.append(model.encode(content, convert_to_tensor=True))
+    return texts, embeddings
 
-def get_embeddings(texts):
-    return embedder.encode(texts, convert_to_tensor=True)
+kb_texts, kb_embeddings = load_knowledge_base()
 
-print("📚 Loading knowledge base...")
-docs, filenames = load_knowledge_base(TEXT_FOLDER)
-doc_embeddings = get_embeddings(docs)
-print("✅ Knowledge base loaded with", len(docs), "documents.")
-
-# === Language Utilities ===
-def detect_lang(text):
-    return detect(text)
-
-def translate_to_en(text):
-    return GoogleTranslator(source='auto', target='en').translate(text)
-
-def translate_back(text, lang):
-    return GoogleTranslator(source='en', target=lang).translate(text)
-
-# === Main Answering Function ===
-def get_answer(user_query):
+# === Translator ===
+def translate_to_english(text, lang):
     try:
-        user_lang = detect_lang(user_query)
-        query_en = translate_to_en(user_query)
+        return translate(text, lang, "en")
+    except:
+        return text
 
-        query_embedding = embedder.encode(query_en, convert_to_tensor=True)
-        scores = util.pytorch_cos_sim(query_embedding, doc_embeddings)[0]
+def translate_from_english(text, lang):
+    try:
+        return translate(text, "en", lang)
+    except:
+        return text
 
-        top_k = min(1, len(scores))  # return only 1 best result
-        top_indices = torch.topk(scores, k=top_k)[1].tolist()
-        top_result = docs[top_indices[0]]
+# === Main Answer Function ===
+def get_answer(query):
+    detected_lang = detect(query)
+    query_en = translate_to_english(query, detected_lang)
 
-        # Return translated answer
-        answer_final = translate_back(top_result, user_lang)
-        return answer_final
+    query_embedding = model.encode(query_en, convert_to_tensor=True)
+    scores = util.pytorch_cos_sim(query_embedding, kb_embeddings)[0]
+    top_idx = torch.argmax(scores).item()
 
-    except Exception as e:
-        return f"❌ Error during answer generation: {str(e)}"
+    if scores[top_idx] < 0.3:
+        return translate_from_english("Sorry, I couldn’t find a good answer for your question.", detected_lang)
+
+    response = kb_texts[top_idx]
+    return translate_from_english(response, detected_lang)
