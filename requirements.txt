@@ -2,7 +2,7 @@ transformers
 sentence-transformers
 faiss-cpu
 langdetect
-googletrans==4.0.0-rc1
 torch
 streamlit
+deep-translator
 python_version == 3.10
