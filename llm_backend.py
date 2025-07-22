@@ -1,34 +1,43 @@
 import os
-import glob
-import faiss
 import torch
-import numpy as np
-import re
+from sklearn.neighbors import NearestNeighbors
+from sentence_transformers import SentenceTransformer
 from langdetect import detect
-from sentence_transformers import SentenceTransformer, util
-from deep_translator import DeepL
+from deep_translator import GoogleTranslator
 
-TRANSCRIPT_DIR = "my1"
-MODEL_NAME = "all-MiniLM-L6-v2"
+# Paths
+TRANSCRIPTS_DIR = "D:/hindupur_dataset/transcripts"
+EMBEDDINGS_PATH = "D:/hindupur_dataset/embeddings1.pt"
 
-embedding_model = SentenceTransformer(MODEL_NAME)
+# Load model
+embedding_model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
 
 def clean_text(text):
-    return re.sub(r"(part\s*\d+|what is data science|#|[*•])", "", text, flags=re.I).strip()
+    lines = text.splitlines()
+    cleaned = []
+    for line in lines:
+        line = line.strip()
+        if line and not any(line.lower().startswith(x) for x in ("part", "#", "*", "what is data", "datasci")):
+            cleaned.append(line)
+    return " ".join(cleaned)
 
 def load_texts_and_embeddings():
     texts = []
-    for file in glob.glob(os.path.join(TRANSCRIPT_DIR, "*.txt")):
-        with open(file, "r", encoding="utf-8") as f:
-            lines = [clean_text(line.strip()) for line in f if line.strip()]
-            texts.extend(lines)
+    files = sorted(os.listdir(TRANSCRIPTS_DIR))
+    for file in files:
+        if file.endswith(".txt"):
+            with open(os.path.join(TRANSCRIPTS_DIR, file), "r", encoding="utf-8") as f:
+                content = f.read()
+                texts.append(clean_text(content))
 
-    embeddings = embedding_model.encode(texts, convert_to_tensor=False, normalize_embeddings=True)
-    embeddings = np.array(embeddings).astype("float32")
+    if os.path.exists(EMBEDDINGS_PATH):
+        embeddings = torch.load(EMBEDDINGS_PATH)
+    else:
+        embeddings = embedding_model.encode(texts, show_progress_bar=True)
+        torch.save(embeddings, EMBEDDINGS_PATH)
 
-    index = faiss.IndexFlatL2(embeddings.shape[1])
-    index.add(embeddings)
-
+    index = NearestNeighbors(n_neighbors=1, metric="cosine")
+    index.fit(embeddings)
     return texts, index
 
 def detect_language(text):
@@ -37,24 +46,24 @@ def detect_language(text):
     except:
         return "en"
 
-def translate_to_english(text):
-    try:
-        return DeepL(source='auto', target='en').translate(text)
-    except:
+def translate_to_english(text, src_lang):
+    if src_lang == "en":
         return text
+    return GoogleTranslator(source=src_lang, target="en").translate(text)
 
-def translate_from_english(text, target):
-    if target == "en":
+def translate_back(text, dest_lang):
+    if dest_lang == "en":
         return text
-    try:
-        return DeepL(source='en', target=target).translate(text)
-    except:
-        return text
+    return GoogleTranslator(source="en", target=dest_lang).translate(text)
 
-def get_answer(question, texts, index):
-    query = clean_text(question)
-    query_embedding = embedding_model.encode([query], convert_to_tensor=False, normalize_embeddings=True)
-    D, I = index.search(np.array(query_embedding).astype("float32"), k=3)
+def answer_question(query, texts, index):
+    query_embedding = embedding_model.encode([query])
+    _, indices = index.kneighbors(query_embedding)
+    return texts[indices[0][0]]
 
-    best_match = texts[I[0][0]] if I[0][0] < len(texts) else "No relevant answer found."
-    return best_match
+def process_input(user_input, texts, index):
+    source_lang = detect_language(user_input)
+    english_query = translate_to_english(user_input, source_lang)
+    answer_in_english = answer_question(english_query, texts, index)
+    answer_in_original_lang = translate_back(answer_in_english, source_lang)
+    return answer_in_original_lang
