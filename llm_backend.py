@@ -1,79 +1,95 @@
 import os
-import torch
+import re
 import faiss
+import torch
 import numpy as np
 from langdetect import detect
-from googletrans import Translator
-from sentence_transformers import SentenceTransformer
+from deep_translator import GoogleTranslator
+from sentence_transformers import SentenceTransformer, util
 
-# === CONFIG ===
-TEXT_FOLDER = r"D:\llm project\my1"
-MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
-translator = Translator()
+# === CONFIGURATION ===
+TEXT_FOLDER = r"D:\llm project\my1"  # Path to your transcript text files
+MODEL_NAME = "all-MiniLM-L6-v2"
+EMBED_DIM = 384  # for MiniLM-based models
 
-# === Load Embedding Model ===
-embedding_model = SentenceTransformer(MODEL_NAME)
+# === Load Sentence Transformer Model ===
+embedder = SentenceTransformer(MODEL_NAME)
 
-# === Load Knowledge Base ===
-corpus = []
-file_names = []
+# === Clean text to improve matching ===
+def clean_text(text):
+    text = re.sub(r"\s+", " ", text)
+    text = re.sub(r"\n+", " ", text)
+    text = re.sub(r"[^a-zA-Z0-9.,!?()\s]", "", text)
+    return text.strip()
 
-for file in os.listdir(TEXT_FOLDER):
-    if file.endswith(".txt"):
-        file_path = os.path.join(TEXT_FOLDER, file)
-        with open(file_path, "r", encoding="utf-8") as f:
-            lines = [line.strip() for line in f.readlines() if line.strip()]
-            corpus.extend(lines)
-            file_names.extend([file] * len(lines))
-
-# === Generate Embeddings ===
-corpus_embeddings = embedding_model.encode(corpus, convert_to_tensor=False)
-corpus_embeddings = np.array(corpus_embeddings).astype("float32")
-
-# === Create FAISS Index ===
-dimension = corpus_embeddings.shape[1]
-index = faiss.IndexFlatL2(dimension)
-index.add(corpus_embeddings)
-
-# === Language Utilities ===
-def detect_language(text):
+# === Translate text using Deep Translator ===
+def translate_text(text, target_lang="en"):
     try:
-        return detect(text)
-    except:
-        return "en"  # fallback to English
+        translated = GoogleTranslator(source="auto", target=target_lang).translate(text)
+        return translated
+    except Exception as e:
+        print(f"[Translation Error] {e}")
+        return text  # Fallback to original if translation fails
 
-def translate(text, src, dest):
-    if src == dest:
-        return text
-    try:
-        return translator.translate(text, src=src, dest=dest).text
-    except:
-        return text
+# === Load all .txt transcripts and embed ===
+def load_knowledge_base():
+    documents = []
+    embeddings = []
 
-# === Search Function ===
-def search_embeddings(query, top_k=3):
-    query_embedding = embedding_model.encode([query])[0].astype("float32")
-    distances, indices = index.search(np.array([query_embedding]), top_k)
-    
-    results = []
-    for idx in indices[0]:
-        if idx < len(corpus):
-            results.append(corpus[idx])
-    
-    # Format the answer as clean paragraphs
-    return "\n\n".join(f"• {r}" for r in results if r.strip())
+    for filename in os.listdir(TEXT_FOLDER):
+        if filename.endswith(".txt"):
+            path = os.path.join(TEXT_FOLDER, filename)
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    content = clean_text(f.read())
+                    if len(content) > 20:  # Ignore short/incomplete files
+                        documents.append(content)
+                        emb = embedder.encode(content, convert_to_tensor=True).cpu().numpy()
+                        embeddings.append(emb)
+            except Exception as e:
+                print(f"[Error reading {filename}]: {e}")
 
-# === Main Entry Point ===
+    if not embeddings:
+        raise ValueError("No valid text files found in the transcript folder.")
+
+    embedding_matrix = np.vstack(embeddings)
+    index = faiss.IndexFlatL2(EMBED_DIM)
+    index.add(embedding_matrix)
+
+    return documents, index, embedding_matrix
+
+# === Load KB on startup ===
+print("📥 Loading Knowledge Base...")
+DOCUMENTS, INDEX, EMBEDDINGS = load_knowledge_base()
+print(f"✅ Loaded {len(DOCUMENTS)} transcript documents.")
+
+# === Process User Input (Text or Transcribed Audio) ===
 def process_input(user_input):
-    input_lang = detect_language(user_input)
-    
-    # Step 1: Translate to English for semantic search
-    user_input_en = translate(user_input, src=input_lang, dest='en')
-    
-    # Step 2: Retrieve answer from KB
-    answer_en = search_embeddings(user_input_en)
-    
-    # Step 3: Translate back to original language (if needed)
-    final_answer = translate(answer_en, src='en', dest=input_lang)
+    # 1. Detect language
+    try:
+        input_lang = detect(user_input)
+    except:
+        input_lang = "en"
 
-    return final_answer or "❌ Sorry, no relevant answer found in your documents."
+    print(f"🌐 Detected language: {input_lang}")
+
+    # 2. Translate to English for semantic search
+    translated_input = translate_text(user_input, "en")
+
+    # 3. Embed the query
+    query_embedding = embedder.encode(translated_input, convert_to_tensor=True).cpu().numpy()
+
+    # 4. Search using FAISS
+    k = 3
+    D, I = INDEX.search(np.array([query_embedding]), k)
+    best_match_index = I[0][0]
+
+    if D[0][0] > 1.0:
+        # No close match
+        response_en = "I'm sorry, I couldn't find any relevant information in the knowledge base."
+    else:
+        response_en = DOCUMENTS[best_match_index]
+
+    # 5. Translate answer back to original language
+    final_response = translate_text(response_en, input_lang)
+    return final_response
