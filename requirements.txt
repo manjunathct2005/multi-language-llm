@@ -1,6 +1,6 @@
 streamlit
-torch
 sentence-transformers
-faiss-cpu
-langdetect
 deep-translator
+langdetect
+faiss-cpu
+torch
