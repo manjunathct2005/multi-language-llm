@@ -1,70 +1,67 @@
+# llm_backend.py
 import os
-import re
 import torch
 import numpy as np
 from langdetect import detect
+from deep_translator import GoogleTranslator
 from sentence_transformers import SentenceTransformer, util
-from argostranslate.package import install_from_path, get_available_packages
-from argostranslate.translate import load_installed_packages, translate
 
-# === PATH CONFIG ===
-TEXT_FOLDER = r"D:\llm project\my1"
-EMBEDDING_DIM = 384
-model = SentenceTransformer("all-MiniLM-L6-v2")
+TRANSCRIPTS_FOLDER = r"D:\llm project\my1"
+MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 
-# === TRANSLATION SETUP ===
-load_installed_packages()
+# Load model once
+model = SentenceTransformer(MODEL_NAME)
 
-def install_lang_package(from_code, to_code):
-    packages = get_available_packages()
-    for pkg in packages:
-        if pkg.from_code == from_code and pkg.to_code == to_code:
-            install_from_path(pkg.download())
-
-# === Clean, Embed and Load Knowledge Base ===
-def clean_text(text):
-    text = re.sub(r'\s+', ' ', text)
-    return text.strip()
-
+# Load all embeddings
 def load_knowledge_base():
-    texts = []
-    embeddings = []
-    for fname in os.listdir(TEXT_FOLDER):
-        if fname.endswith(".txt"):
-            path = os.path.join(TEXT_FOLDER, fname)
-            with open(path, "r", encoding="utf-8") as f:
-                content = clean_text(f.read())
-                if content:
-                    texts.append(content)
-                    embeddings.append(model.encode(content, convert_to_tensor=True))
-    return texts, embeddings
+    knowledge = []
+    for file in os.listdir(TRANSCRIPTS_FOLDER):
+        if file.endswith(".txt"):
+            path = os.path.join(TRANSCRIPTS_FOLDER, file)
+            with open(path, 'r', encoding='utf-8') as f:
+                content = f.read().strip()
+                sentences = content.split('.')
+                for sentence in sentences:
+                    sentence = sentence.strip()
+                    if sentence:
+                        emb = model.encode(sentence)
+                        knowledge.append((sentence, emb))
+    return knowledge
 
-kb_texts, kb_embeddings = load_knowledge_base()
+knowledge_base = load_knowledge_base()
 
-# === Translator ===
-def translate_to_english(text, lang):
+# Language detection
+def detect_language(text):
     try:
-        return translate(text, lang, "en")
+        return detect(text)
+    except:
+        return "en"
+
+# Translation
+def translate(text, source, target):
+    if source == target:
+        return text
+    try:
+        return GoogleTranslator(source=source, target=target).translate(text)
     except:
         return text
 
-def translate_from_english(text, lang):
-    try:
-        return translate(text, "en", lang)
-    except:
-        return text
-
-# === Main Answer Function ===
+# Get Answer
 def get_answer(query):
-    detected_lang = detect(query)
-    query_en = translate_to_english(query, detected_lang)
+    user_lang = detect_language(query)
+    query_en = translate(query, source=user_lang, target="en")
+    query_emb = model.encode(query_en)
 
-    query_embedding = model.encode(query_en, convert_to_tensor=True)
-    scores = util.pytorch_cos_sim(query_embedding, kb_embeddings)[0]
-    top_idx = torch.argmax(scores).item()
+    scores = []
+    for sent, emb in knowledge_base:
+        score = util.cos_sim(query_emb, emb)
+        scores.append((sent, score.item()))
 
-    if scores[top_idx] < 0.3:
-        return translate_from_english("Sorry, I couldn’t find a good answer for your question.", detected_lang)
+    best = sorted(scores, key=lambda x: x[1], reverse=True)[:1]
+    if best and best[0][1] > 0.45:
+        answer_en = best[0][0]
+        answer_final = translate(answer_en, source="en", target=user_lang)
+    else:
+        answer_final = translate("No relevant answer found in knowledge base.", source="en", target=user_lang)
 
-    response = kb_texts[top_idx]
-    return translate_from_english(response, detected_lang)
+    return answer_final
