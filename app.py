@@ -1,39 +1,52 @@
-import os
+# app.py
+
 import streamlit as st
 from llm_backend import process_input
 
-# === Streamlit UI Configuration ===
-os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
-os.environ["STREAMLIT_WATCHER_TYPE"] = "none"
+# === PAGE CONFIG ===
+st.set_page_config(page_title="📚 Smart Multilingual Q&A", layout="centered")
+st.title("🤖 Multilingual Knowledge Assistant")
+st.write("Ask questions from your custom data in **English, Hindi, Telugu, or Kannada**.")
 
-st.set_page_config(page_title="📚 Multilingual LLM Tool", layout="centered")
-st.title("🔍 Multilingual Q&A using Your Text Files")
+# === INPUT SECTION ===
+user_input = st.text_input("💬 Enter your question below:", max_chars=500, placeholder="e.g., What are the steps in Data Science lifecycle?")
 
-# === Sidebar ===
-st.sidebar.title("📁 Settings")
-st.sidebar.markdown("This tool answers your questions using knowledge from uploaded `.txt` files.")
-
-# === Input ===
-user_input = st.text_input("📝 Ask a question (in English, Hindi, Telugu, Kannada):", "What is the data science lifecycle?")
-
-# === Process Input ===
-if user_input.strip():
-    with st.spinner("Thinking..."):
+# === PROCESS AND DISPLAY ===
+if user_input:
+    with st.spinner("🔍 Searching your data for the most relevant answer..."):
         response = process_input(user_input)
 
-    # === Output in Styled Format ===
-    if response:
-        st.markdown("""
-        <div style="padding:1em; background-color:#f1f1f1; border-radius:10px">
-        <h4 style="color:#4CAF50;">📘 Answer</h4>
-        <div style="font-size:16px; line-height:1.6">{}</div>
-        </div>
-        """.format(response), unsafe_allow_html=True)
-    else:
-        st.warning("❌ Sorry, I couldn't find an answer. Please try rephrasing your question.")
-else:
-    st.info("💡 Enter a question above to get started.")
-
-# === Footer ===
-st.markdown("---")
-st.markdown("Built with ❤️ using HuggingFace models and Sentence Transformers")
+    # === FORMATTED RESPONSE DISPLAY ===
+    st.markdown("---")
+    st.subheader("📝 Answer:")
+    
+    # Split the answer into sections (headings, bullets, code, etc.)
+    lines = response.strip().split('\n')
+    for line in lines:
+        line = line.strip()
+        if line.startswith("###"):
+            st.markdown(f"{line}")
+        elif line.startswith("**") and line.endswith("**"):
+            st.markdown(f"{line}")
+        elif line.startswith("- ") or line.startswith("• "):
+            st.markdown(f"{line}")
+        elif line.startswith("```") and line.endswith("```"):
+            st.code(line.strip("```"), language="python")
+        elif "```" in line:
+            # Handle multiline code blocks
+            code_block = []
+            code_mode = False
+            for l in lines:
+                if l.strip().startswith("```"):
+                    if not code_mode:
+                        code_mode = True
+                        code_lang = l.strip()[3:] or "text"
+                    else:
+                        st.code("\n".join(code_block), language=code_lang)
+                        code_block = []
+                        code_mode = False
+                elif code_mode:
+                    code_block.append(l)
+            break
+        else:
+            st.markdown(f"{line}")
