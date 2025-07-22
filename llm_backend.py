@@ -6,58 +6,71 @@ import faiss
 from langdetect import detect
 from deep_translator import GoogleTranslator
 
-# Path where your custom .txt files are stored
-TEXT_FOLDER = "my1"
+# Folder where .txt files are stored
+TEXT_FOLDER = r"D:\llm project\my1"
 
-# Load multilingual sentence transformer
-EMBEDDINGS_MODEL = SentenceTransformer("sentence-transformers/distiluse-base-multilingual-cased-v1")
+# Load sentence transformer model
+MODEL = SentenceTransformer("sentence-transformers/distiluse-base-multilingual-cased-v1")
 
-# Load and embed documents
-def load_knowledge_base():
-    documents = []
-    file_names = []
-    for filename in os.listdir(TEXT_FOLDER):
-        if filename.endswith(".txt"):
-            with open(os.path.join(TEXT_FOLDER, filename), "r", encoding="utf-8") as f:
+# Preload all sentences and build FAISS index
+def load_chunks_and_embeddings():
+    chunks = []
+    chunk_sources = []
+
+    for file in os.listdir(TEXT_FOLDER):
+        if file.endswith(".txt"):
+            path = os.path.join(TEXT_FOLDER, file)
+            with open(path, "r", encoding="utf-8") as f:
                 text = f.read()
-                documents.append(text)
-                file_names.append(filename)
-    embeddings = EMBEDDINGS_MODEL.encode(documents)
+                # Split text into small chunks (sentences or paragraphs)
+                for para in text.split("\n\n"):
+                    clean_para = para.strip()
+                    if 20 < len(clean_para) < 1000:  # reasonable size
+                        chunks.append(clean_para)
+                        chunk_sources.append(file)
+
+    embeddings = MODEL.encode(chunks)
     index = faiss.IndexFlatL2(embeddings.shape[1])
     index.add(np.array(embeddings).astype("float32"))
-    return documents, index, embeddings
+    return chunks, chunk_sources, index
 
-DOCUMENTS, INDEX, EMBEDDINGS = load_knowledge_base()
+CHUNKS, SOURCES, INDEX = load_chunks_and_embeddings()
 
-# Detect language and translate to English
+# Translate to English if not already
 def translate_to_english(text):
     lang = detect(text)
     if lang != "en":
         try:
-            return GoogleTranslator(source="auto", target="en").translate(text)
+            return GoogleTranslator(source="auto", target="en").translate(text), lang
+        except:
+            return text, lang
+    return text, "en"
+
+# Translate back to original language
+def translate_back_to_lang(text, target_lang):
+    if target_lang != "en":
+        try:
+            return GoogleTranslator(source="en", target=target_lang).translate(text)
         except:
             return text
     return text
 
-# Answer generation logic
-def process_input(user_question, top_k=2):
+# Final input processing
+def process_input(user_question, top_k=1):
     try:
-        # Translate input to English if needed
-        question_in_english = translate_to_english(user_question)
-        
-        # Embed and search
-        question_vector = EMBEDDINGS_MODEL.encode([question_in_english])
-        D, I = INDEX.search(np.array(question_vector).astype("float32"), top_k)
+        translated_qn, original_lang = translate_to_english(user_question)
+        question_embedding = MODEL.encode([translated_qn])
+        D, I = INDEX.search(np.array(question_embedding).astype("float32"), top_k)
 
-        # Construct contextual answer
-        response = ""
-        for idx in I[0]:
-            if 0 <= idx < len(DOCUMENTS):
-                response += f"**Answer:**\n\n{DOCUMENTS[idx].strip()}\n\n---\n"
-        
-        if not response:
-            return "Sorry, I couldn’t find a relevant answer in your data."
-        
-        return response
+        top_chunk = CHUNKS[I[0][0]].strip()
+        source_file = SOURCES[I[0][0]]
+
+        # Translate back if original question was not in English
+        final_answer = translate_back_to_lang(top_chunk, original_lang)
+
+        # Add red-colored title using HTML
+        html_response = f"<span style='color:red'><b>📌 Most Relevant Answer (from {source_file}):</b></span><br><br>{final_answer}"
+        return html_response
+
     except Exception as e:
-        return f"⚠️ Error: {str(e)}"
+        return f"<span style='color:red'>⚠️ Error:</span> {str(e)}"
