@@ -1,104 +1,99 @@
+# ================= llm_backend.py =================
 import os
 import torch
+import re
 import numpy as np
+import faiss
 from langdetect import detect
-from transformers import MarianMTModel, MarianTokenizer
+from deep_translator import GoogleTranslator
 from sentence_transformers import SentenceTransformer, util
 
 # === CONFIG ===
 TEXT_FOLDER = r"D:\llm project\my1"
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+MODEL_NAME = "all-MiniLM-L6-v2"
+EMBEDDING_DIM = 384
 
-model_name = "sentence-transformers/all-MiniLM-L6-v2"
-embedder = SentenceTransformer(model_name, device=DEVICE)
+# === Load model ===
+model = SentenceTransformer(MODEL_NAME)
 
-# === TRANSLATION MODELS ===
-LANGUAGE_MODELS = {
-    "hi": "Helsinki-NLP/opus-mt-hi-en",
-    "te": "Helsinki-NLP/opus-mt-te-en",
-    "kn": "Helsinki-NLP/opus-mt-kn-en",
-    "en": None  # No translation needed
-}
-
-REVERSE_MODELS = {
-    "hi": "Helsinki-NLP/opus-mt-en-hi",
-    "te": "Helsinki-NLP/opus-mt-en-te",
-    "kn": "Helsinki-NLP/opus-mt-en-kn",
-    "en": None
-}
-
-def load_model_pair(lang):
-    src = LANGUAGE_MODELS.get(lang)
-    tgt = REVERSE_MODELS.get(lang)
-    src_model = src_tokenizer = tgt_model = tgt_tokenizer = None
-
-    if src:
-        src_model = MarianMTModel.from_pretrained(src).to(DEVICE)
-        src_tokenizer = MarianTokenizer.from_pretrained(src)
-    if tgt:
-        tgt_model = MarianMTModel.from_pretrained(tgt).to(DEVICE)
-        tgt_tokenizer = MarianTokenizer.from_pretrained(tgt)
-    
-    return src_tokenizer, src_model, tgt_tokenizer, tgt_model
-
-TRANSLATORS = {
-    lang: load_model_pair(lang) for lang in LANGUAGE_MODELS
-}
-
-def translate(text, lang_from, lang_to="en"):
-    if lang_from == "en":
-        return text
-    tokenizer, model, _, _ = TRANSLATORS[lang_from]
-    inputs = tokenizer.prepare_seq2seq_batch([text], return_tensors="pt").to(DEVICE)
-    outputs = model.generate(**inputs)
-    return tokenizer.decode(outputs[0], skip_special_tokens=True)
-
-def back_translate(text, lang_to):
-    if lang_to == "en":
-        return text
-    _, _, tokenizer, model = TRANSLATORS[lang_to]
-    inputs = tokenizer.prepare_seq2seq_batch([text], return_tensors="pt").to(DEVICE)
-    outputs = model.generate(**inputs)
-    return tokenizer.decode(outputs[0], skip_special_tokens=True)
+# === Preprocess and load text ===
+def clean_text(text):
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
 
 def load_transcripts():
-    chunks = []
-    sources = []
-    if not os.path.exists(TEXT_FOLDER):
-        print("Transcript folder missing!")
-        return chunks, sources
-
+    chunks, sources = [], []
     for file in os.listdir(TEXT_FOLDER):
         if file.endswith(".txt"):
-            path = os.path.join(TEXT_FOLDER, file)
-            with open(path, "r", encoding="utf-8") as f:
-                text = f.read().strip()
-                cleaned = [line for line in text.split("\n") if line.strip()]
-                for line in cleaned:
-                    chunks.append(line)
-                    sources.append(file)
+            with open(os.path.join(TEXT_FOLDER, file), "r", encoding="utf-8") as f:
+                content = f.read().split("\n")
+                for line in content:
+                    line = clean_text(line)
+                    if 20 < len(line) < 1000:
+                        chunks.append(line)
+                        sources.append(file)
     return chunks, sources
 
 CHUNKS, SOURCES = load_transcripts()
-EMBEDDINGS = embedder.encode(CHUNKS, convert_to_tensor=True)
+EMBEDDINGS = model.encode(CHUNKS, convert_to_tensor=True)
 
+# === Language utils ===
 def detect_language(text):
     try:
         return detect(text)
     except:
         return "en"
 
+def translate_to_english(text):
+    lang = detect_language(text)
+    if lang != "en":
+        return GoogleTranslator(source=lang, target="en").translate(text), lang
+    return text, "en"
+
+def translate_from_english(text, target_lang):
+    if target_lang != "en":
+        return GoogleTranslator(source="en", target=target_lang).translate(text)
+    return text
+
+# === Q&A ===
 def answer_question(query):
-    lang = detect_language(query)
-    translated = translate(query, lang)
+    translated_query, orig_lang = translate_to_english(query)
+    query_embedding = model.encode(translated_query, convert_to_tensor=True)
+    scores = util.pytorch_cos_sim(query_embedding, EMBEDDINGS)[0]
+    top_idx = torch.argmax(scores).item()
+    answer = CHUNKS[top_idx]
+    translated_answer = translate_from_english(answer, orig_lang)
+    return translated_answer, SOURCES[top_idx]
 
-    query_embedding = embedder.encode(translated, convert_to_tensor=True)
-    hits = util.semantic_search(query_embedding, EMBEDDINGS, top_k=3)[0]
+def load_available_languages():
+    return ["en", "hi", "te", "kn"]  # You can extend this
 
-    if not hits or hits[0]['score'] < 0.45:
-        response = "❓ I could not find a relevant answer."
-    else:
-        response = CHUNKS[hits[0]['corpus_id']]
 
-    final_answer = back_translate(response, lang)
-    return final_answer, SOURCES[hits[0]['corpus_id']] if hits else "No source"
+# ================= app.py =================
+import os
+import streamlit as st
+from llm_backend import answer_question, load_available_languages
+
+st.set_page_config(page_title="Multilingual Q&A Tool", layout="centered")
+st.title("🌍 Multilingual Question Answering App")
+
+# Sidebar options
+st.sidebar.header("Language Settings")
+supported_langs = load_available_languages()
+st.sidebar.markdown("Available languages: " + ", ".join(supported_langs))
+
+# Main query input
+query = st.text_input("Ask your question (Any language supported):")
+
+if query:
+    with st.spinner("Generating answer..."):
+        try:
+            answer, source = answer_question(query)
+            st.success("Answer:")
+            st.write(answer)
+            st.caption(f"📁 Source file: {source}")
+        except Exception as e:
+            st.error(f"Something went wrong. Details: {e}")
+
+st.markdown("---")
+st.caption("💡 Supports English, Hindi, Telugu, Kannada. Uses local embeddings and multilingual translation.")
