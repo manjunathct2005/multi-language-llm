@@ -1,19 +1,23 @@
 import streamlit as st
-from llm_backend import get_answer
+from llm_backend import detect_language, translate_text, load_knowledge_base, get_answer
 
-st.set_page_config(page_title="Multilingual Q&A Chatbot", layout="centered")
-st.markdown("## 🌐 Multilingual Q&A Chatbot")
-st.markdown("Ask in **English**, **Hindi**, **Telugu**, or **Kannada**")
+st.set_page_config(page_title="Multilingual LLM Tool", layout="centered")
+st.title("🌐 Multilingual Q&A Assistant")
+st.markdown("Supports questions in English, Hindi, Telugu, and Kannada.")
 
-query = st.text_input("💬 Ask your question here:", "")
+texts, embeddings = load_knowledge_base()
 
-if st.button("🔍 Get Answer"):
-    if query.strip():
-        with st.spinner("Generating answer..."):
-            try:
-                answer = get_answer(query)
-                st.success(f"🗣️ Answer: {answer}")
-            except Exception as e:
-                st.error(f"❌ Failed to generate an answer.\n\n{str(e)}")
+query = st.text_input("🔍 Ask your question")
+
+if st.button("Get Answer") and query:
+    lang = detect_language(query)
+    st.markdown(f"🗣️ Detected Language: **{lang.upper()}**")
+
+    translated_query = translate_text(query, lang, "en") if lang != "en" else query
+    answer = get_answer(translated_query, texts, embeddings)
+
+    if answer:
+        final_answer = translate_text(answer, "en", lang) if lang != "en" else answer
+        st.success(final_answer)
     else:
-        st.warning("Please enter a question to continue.")
+        st.warning("🤷‍♂️ No relevant answer found.")
