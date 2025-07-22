@@ -7,7 +7,7 @@ from langdetect import detect
 from deep_translator import GoogleTranslator
 
 # Folder where .txt files are stored
-TEXT_FOLDER = r"D:\llm project\my1"
+TEXT_FOLDER = r"\my1"
 
 # Load sentence transformer model
 MODEL = SentenceTransformer("sentence-transformers/distiluse-base-multilingual-cased-v1")
