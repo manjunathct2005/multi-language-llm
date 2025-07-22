@@ -1,72 +1,118 @@
-# llm_backend.py
-
 import os
+import re
+import faiss
+import numpy as np
 import torch
 from langdetect import detect
-from sentence_transformers import SentenceTransformer, util
-from transformers import pipeline, AutoTokenizer, AutoModelForSeq2SeqLM
+from googletrans import Translator
+from sentence_transformers import SentenceTransformer
 
-# Load default Hugging Face models
-device = "cuda" if torch.cuda.is_available() else "cpu"
+# === CONFIG ===
+TEXT_FOLDER = "data"  # <-- relative path to your text files folder (upload to GitHub)
+MODEL_DIR = "models/all-MiniLM-L6-v2"  # local model directory in repo
+translator = Translator()
+model = SentenceTransformer(MODEL_DIR)
 
-# Replace with any cloud-friendly model
-EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
-embedder = SentenceTransformer(EMBEDDING_MODEL, device=device)
+# === Clean and Chunk Logic ===
+def clean_and_chunk(text):
+    text = re.sub(r"[^\x00-\x7F]+", " ", text)  # Remove emojis/non-ASCII
+    text = re.sub(r"\s{2,}", " ", text)
+    text = re.sub(r"---+", "\n---\n", text)  # Normalize topic markers
+    text = re.sub(r"\n{2,}", "\n", text)
 
-# Translation pipelines
-translator_en_hi = pipeline("translation", model="Helsinki-NLP/opus-mt-en-hi")
-translator_hi_en = pipeline("translation", model="Helsinki-NLP/opus-mt-hi-en")
-translator_te_en = pipeline("translation", model="Helsinki-NLP/opus-mt-te-en")
-translator_en_te = pipeline("translation", model="Helsinki-NLP/opus-mt-en-te")
+    raw_chunks = re.split(r"\n\s*---\s*\n", text)
+    clean_chunks = []
 
-# Load transcript knowledge base (you must upload .txt files separately)
-TRANSCRIPT_FOLDER = "transcripts"
-knowledge_base = []
+    for chunk in raw_chunks:
+        chunk = chunk.strip()
+        if not chunk or len(chunk) < 50:
+            continue
+        lines = chunk.split("\n")
+        cleaned = "\n".join([line.strip() for line in lines if line.strip()])
+        clean_chunks.append(cleaned)
+    
+    return clean_chunks
 
-def load_knowledge_base():
-    global knowledge_base
-    for file in os.listdir(TRANSCRIPT_FOLDER):
+# === Load documents
+def load_documents():
+    all_chunks = []
+    if not os.path.exists(TEXT_FOLDER):
+        print(f"[!] TEXT_FOLDER not found: {TEXT_FOLDER}")
+        return []
+    
+    for file in os.listdir(TEXT_FOLDER):
         if file.endswith(".txt"):
-            path = os.path.join(TRANSCRIPT_FOLDER, file)
-            with open(path, "r", encoding="utf-8") as f:
+            with open(os.path.join(TEXT_FOLDER, file), encoding="utf-8") as f:
                 text = f.read()
-                knowledge_base.append((text, embedder.encode(text)))
+                chunks = clean_and_chunk(text)
+                all_chunks.extend(chunks)
+    return all_chunks
 
-load_knowledge_base()
+# === Build vector index
+print("[✓] Loading and cleaning text files...")
+knowledge_base = load_documents()
+print(f"[✓] {len(knowledge_base)} knowledge blocks found.")
 
-def detect_language(text):
+print("[✓] Creating embeddings...")
+kb_embeddings = model.encode(knowledge_base, convert_to_numpy=True, show_progress_bar=True)
+
+dimension = kb_embeddings.shape[1]
+index = faiss.IndexFlatL2(dimension)
+index.add(kb_embeddings)
+print("[✓] FAISS index ready.")
+
+# === Language Translate
+def translate_to_en(text):
     try:
-        return detect(text)
+        text_clean = re.sub(r"[^\w\s]", "", text.lower().strip())
+        word_count = len(text_clean.split())
+        if word_count <= 3:
+            return text.strip(), "en"
+        lang = detect(text_clean)
+        if lang not in ["en", "te"]:
+            return text.strip(), "en"
+        if lang == "en":
+            return text.strip(), "en"
+        translated = translator.translate(text, src="te", dest="en")
+        return translated.text.strip(), "te"
     except:
-        return "en"
+        return text.strip(), "en"
 
-def translate_to_english(text, lang):
-    if lang == "hi":
-        return translator_hi_en(text)[0]['translation_text']
-    elif lang == "te":
-        return translator_te_en(text)[0]['translation_text']
-    return text
+def translate_back(text, lang):
+    if lang == "en":
+        return text
+    try:
+        return translator.translate(text, src="en", dest=lang).text
+    except:
+        return text
 
-def translate_from_english(text, target_lang):
-    if target_lang == "hi":
-        return translator_en_hi(text)[0]['translation_text']
-    elif target_lang == "te":
-        return translator_en_te(text)[0]['translation_text']
-    return text
+# === Semantic Search
+def find_best_paragraph(query_en, top_k=3):
+    query_vector = model.encode([query_en], convert_to_numpy=True)
+    D, I = index.search(query_vector, top_k)
+    matches = []
+    for i, score in zip(I[0], D[0]):
+        if score < 1.1:
+            matches.append((knowledge_base[i], 1 - score))
+    return matches
 
-def find_best_answer(query):
-    query_embedding = embedder.encode(query)
-    best_score = -1
-    best_answer = "❌ No relevant answer found in knowledge base."
-    for passage, emb in knowledge_base:
-        score = util.cos_sim(query_embedding, emb)[0][0]
-        if score > best_score:
-            best_score = score
-            best_answer = passage
-    return best_answer
+# === Main Process
+def process_input(query):
+    query = query.strip()
+    if not query:
+        return "Please enter a question.", "en"
 
-def process_input(user_input):
-    lang = detect_language(user_input)
-    english_query = translate_to_english(user_input, lang)
-    answer_en = find_best_answer(english_query)
-    return translate_from_english(answer_en, lang)
+    query_en, lang = translate_to_en(query)
+    if query_en is None:
+        return "Only Telugu and English are supported.", "en"
+
+    if not knowledge_base:
+        return "Knowledge base is empty.", lang
+
+    matches = find_best_paragraph(query_en, top_k=3)
+    if matches:
+        best_text, score = matches[0]
+        translated = translate_back(best_text, lang)
+        return translated.strip(), f"{score:.2f}"
+    else:
+        return "No relevant answer found.", lang
