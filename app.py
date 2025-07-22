@@ -1,37 +1,40 @@
-# app.py
-
-import streamlit as st
+import warnings
 import os
-from llm_backend import load_texts_and_embeddings, process_input
+import streamlit as st
+from llm_backend import answer_question, load_available_languages
 
-# Set up Streamlit config
-st.set_page_config(page_title="Multilingual QA Tool", layout="centered")
-st.title("🌐 Multilingual Question Answering App")
-st.markdown("Ask a question in **English, Hindi, Telugu, or any supported language**. The system will reply in the same language.")
+warnings.filterwarnings("ignore")
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
+os.environ["STREAMLIT_WATCHER_TYPE"] = "none"
 
-# Load data
-@st.cache_resource
-def load_resources():
-    texts, index, embeddings = load_texts_and_embeddings()
-    return texts, index
+st.set_page_config(page_title="Multilingual Q&A LLM", layout="centered")
 
-with st.spinner("🔄 Loading knowledge base..."):
-    texts, index = load_resources()
+st.title("🌐 Multilingual LLM Q&A Tool")
+st.markdown("Ask any question in your language. It will search the knowledge base and respond in the same language.")
 
-# Input UI
-user_input = st.text_input("📝 Enter your question:", placeholder="Type here...")
-submit = st.button("🔍 Get Answer")
+# Load available languages from backend
+available_langs = load_available_languages()
 
-if submit and user_input.strip():
-    with st.spinner("🧠 Thinking..."):
-        try:
-            answer = process_input(user_input, texts, index)
-            st.success("💡 Answer:")
-            st.write(answer)
-        except Exception as e:
-            st.error(f"❌ Error while answering: {str(e)}")
+# Input method
+input_type = st.radio("Select Input Type:", ["Text Question", "Upload Audio"], horizontal=True)
 
-# Optional: show debug logs or metadata
-with st.expander("⚙️ Debug Info"):
-    st.write("📁 Text files loaded:", len(texts))
-    st.write("✅ Embedding index ready.")
+# Handle text question
+if input_type == "Text Question":
+    user_question = st.text_input("❓ Enter your question", max_chars=500)
+    if st.button("Get Answer") and user_question.strip() != "":
+        with st.spinner("Processing..."):
+            answer = answer_question(user_question)
+        st.markdown("**Answer:**")
+        st.success(answer)
+
+# Handle audio input
+else:
+    uploaded_audio = st.file_uploader("🔊 Upload Audio File (.mp3, .wav)", type=["mp3", "wav"])
+    if uploaded_audio is not None and st.button("Transcribe & Answer"):
+        with st.spinner("Transcribing..."):
+            answer = answer_question(uploaded_audio)
+        st.markdown("**Answer:**")
+        st.success(answer)
+
+st.markdown("---")
+st.markdown("💬 **Supported Languages**: " + ", ".join(available_langs))
