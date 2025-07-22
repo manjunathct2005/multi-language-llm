@@ -5,4 +5,3 @@ langdetect
 torch
 streamlit
 deep-translator
-python_version == 3.10
