@@ -1,72 +1,62 @@
 import os
-import numpy as np
-import faiss
-from sentence_transformers import SentenceTransformer
-from langdetect import detect
-from deep_translator import DeeplTranslator, single_detection
+import torch
 import re
+from deep_translator import GoogleTranslator  # Offline-friendly
+from langdetect import detect
+from sentence_transformers import SentenceTransformer, util
 
-# Use relative path for deployment
-TEXT_FOLDER = "my1"
+# === CONFIG ===
+TEXT_FOLDER = r"D:\llm project\my1"  # Make sure this path exists and has .txt transcript files
+DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
+MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
+EMBEDDING_MODEL = SentenceTransformer(MODEL_NAME).to(DEVICE)
 
-EMBEDDINGS_MODEL = SentenceTransformer("sentence-transformers/distiluse-base-multilingual-cased-v1")
+# === GLOBAL CACHES ===
+CHUNKS = []
+SOURCES = []
+EMBEDDINGS = []
 
-def load_knowledge_base():
-    documents = []
-    sources = []
-    if not os.path.exists(TEXT_FOLDER):
-        raise FileNotFoundError(f"Text folder not found: {TEXT_FOLDER}")
-    for filename in os.listdir(TEXT_FOLDER):
-        if filename.endswith(".txt"):
-            with open(os.path.join(TEXT_FOLDER, filename), "r", encoding="utf-8") as f:
-                text = f.read()
-                chunks = split_into_chunks(text)
-                documents.extend(chunks)
-                sources.extend([filename] * len(chunks))
-    embeddings = EMBEDDINGS_MODEL.encode(documents)
-    index = faiss.IndexFlatL2(embeddings.shape[1])
-    index.add(np.array(embeddings).astype("float32"))
-    return documents, sources, index
-
-def split_into_chunks(text, chunk_size=500):
-    sentences = re.split(r'(?<=[.?!])\s+', text)
-    chunks = []
-    current_chunk = ""
-    for sentence in sentences:
-        if len(current_chunk) + len(sentence) <= chunk_size:
-            current_chunk += sentence + " "
-        else:
-            chunks.append(current_chunk.strip())
-            current_chunk = sentence + " "
-    if current_chunk:
-        chunks.append(current_chunk.strip())
-    return chunks
-
-def translate_to_english(text):
-    lang = detect(text)
-    if lang != "en":
-        try:
-            return DeeplTranslator(source="auto", target="en").translate(text)
-        except:
-            return text
+def clean_text(text):
+    text = re.sub(r"\n+", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
     return text
 
-CHUNKS, SOURCES, INDEX = load_knowledge_base()
+def load_transcripts():
+    global CHUNKS, SOURCES, EMBEDDINGS
+    for file in os.listdir(TEXT_FOLDER):
+        if file.endswith(".txt"):
+            with open(os.path.join(TEXT_FOLDER, file), 'r', encoding='utf-8') as f:
+                content = f.read()
+                cleaned = clean_text(content)
+                if cleaned:
+                    CHUNKS.append(cleaned)
+                    SOURCES.append(file)
+    EMBEDDINGS.extend(EMBEDDING_MODEL.encode(CHUNKS, convert_to_tensor=True))
 
-def answer_question(question, top_k=3):
+def detect_lang(text):
     try:
-        translated_question = translate_to_english(question)
-        question_vector = EMBEDDINGS_MODEL.encode([translated_question])
-        D, I = INDEX.search(np.array(question_vector).astype("float32"), top_k)
+        return detect(text)
+    except:
+        return 'en'
 
-        results = []
-        for idx in I[0]:
-            if 0 <= idx < len(CHUNKS):
-                results.append(f"<span style='color:red'><b>Answer:</b></span><br>{CHUNKS[idx]}")
-        
-        if results:
-            return "<br><hr><br>".join(results)
-        else:
-            return "<span style='color:red'><b>Sorry:</b></span> No relevant answer found."
-    except Exception as e:
-        return f"<span style='color:red'>⚠️ Error:</span> {str(e)}"
+def translate(text, src_lang, tgt_lang):
+    try:
+        return GoogleTranslator(source=src_lang, target=tgt_lang).translate(text)
+    except:
+        return text  # fallback
+
+def answer_question(query):
+    if not EMBEDDINGS:
+        load_transcripts()
+    query_lang = detect_lang(query)
+    query_en = translate(query, src_lang=query_lang, tgt_lang="en")
+
+    query_embedding = EMBEDDING_MODEL.encode(query_en, convert_to_tensor=True)
+    scores = util.pytorch_cos_sim(query_embedding, EMBEDDINGS)[0]
+    top_idx = torch.argmax(scores).item()
+    best_match = CHUNKS[top_idx]
+    answer_translated = translate(best_match, src_lang="en", tgt_lang=query_lang)
+    return answer_translated
+
+def load_available_languages():
+    return ['en', 'hi', 'te', 'kn', 'ta', 'ml']
