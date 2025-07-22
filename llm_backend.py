@@ -6,7 +6,7 @@ from langdetect import detect
 from deep_translator import GoogleTranslator
 
 # Paths
-TRANSCRIPTS_DIR = "D:/hindupur_dataset/transcripts"
+TRANSCRIPTS_DIR = "my1"
 EMBEDDINGS_PATH = "D:/hindupur_dataset/embeddings1.pt"
 
 # Load model
