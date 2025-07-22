@@ -1,5 +1,5 @@
-torch==2.3.0
-torchaudio==2.3.0
+torch==2.7.1
+torchaudio==2.7.1
 sentence-transformers
 langdetect
 transformers
