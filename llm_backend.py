@@ -5,17 +5,14 @@ from langdetect import detect
 from deep_translator import GoogleTranslator
 import re
 
-# Load model once globally
+# Load model
 embedder = SentenceTransformer("all-MiniLM-L6-v2")
 
 def clean_text(text):
-    # Remove emojis, symbols, URLs, multiple spaces
-    text = re.sub(r"http\S+", "", text)                       # URLs
-    text = re.sub(r"[^\w\s.,!?]", "", text)                   # Special characters
-    text = re.sub(r"\n+", " ", text)                          # Newlines
-    text = re.sub(r"\s+", " ", text).strip()                  # Extra spaces
-
-    # Remove repeated segments (like ads, names)
+    text = re.sub(r"http\S+", "", text)
+    text = re.sub(r"[^\w\s.,!?]", "", text)
+    text = re.sub(r"\n+", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
     lines = list(set(text.split('.')))
     cleaned = '. '.join([line.strip() for line in lines if len(line.strip()) > 15])
     return cleaned
@@ -29,7 +26,6 @@ def load_transcripts(transcript_dir="my1"):
             with open(os.path.join(transcript_dir, filename), "r", encoding="utf-8") as f:
                 raw = f.read()
                 cleaned = clean_text(raw)
-
                 if cleaned and cleaned not in seen_texts:
                     seen_texts.add(cleaned)
                     texts.append(cleaned)
