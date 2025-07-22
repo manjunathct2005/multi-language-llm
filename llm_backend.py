@@ -1,75 +1,78 @@
+# llm_backend.py
 import os
+import re
+import torch
 import numpy as np
-from sentence_transformers import SentenceTransformer
-from sklearn.metrics.pairwise import cosine_similarity
 import faiss
 from langdetect import detect
-from deep_translator import GoogleTranslator
+from sentence_transformers import SentenceTransformer
+from googletrans import Translator
 
 # === CONFIG ===
-TEXT_FOLDER = "my1"  # Update if needed
-EMBEDDINGS_MODEL = SentenceTransformer("sentence-transformers/distiluse-base-multilingual-cased-v1")
+TEXT_FOLDER = r"D:\llm project\my1"
+EMBEDDING_DIM = 384
+MODEL_NAME = "all-MiniLM-L6-v2"
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
-# === Load Texts and Embeddings ===
-def load_knowledge_base():
-    documents = []
-    file_names = []
-    for filename in os.listdir(TEXT_FOLDER):
-        if filename.endswith(".txt"):
-            with open(os.path.join(TEXT_FOLDER, filename), "r", encoding="utf-8") as f:
-                text = f.read().strip()
-                if text:  # Skip empty files
-                    documents.append(text)
-                    file_names.append(filename)
-    embeddings = EMBEDDINGS_MODEL.encode(documents, show_progress_bar=False)
-    index = faiss.IndexFlatL2(embeddings.shape[1])
-    index.add(np.array(embeddings).astype("float32"))
-    return documents, index, embeddings
+# === LOAD EMBEDDING MODEL ===
+model = SentenceTransformer(MODEL_NAME, device=DEVICE)
 
-DOCUMENTS, INDEX, EMBEDDINGS = load_knowledge_base()
+# === LOAD FILES ===
+def clean_text(text):
+    lines = text.splitlines()
+    seen = set()
+    cleaned = []
+    for line in lines:
+        line = line.strip()
+        if len(line) > 1 and line not in seen:
+            seen.add(line)
+            cleaned.append(line)
+    return " ".join(cleaned)
 
-# === Translation ===
-def translate_to_english(text):
+texts, filenames = [], []
+for fname in os.listdir(TEXT_FOLDER):
+    if fname.endswith(".txt"):
+        with open(os.path.join(TEXT_FOLDER, fname), "r", encoding="utf-8") as f:
+            content = f.read().strip()
+            cleaned = clean_text(content)
+            texts.append(cleaned)
+            filenames.append(fname)
+
+# === BUILD EMBEDDING INDEX ===
+embeddings = model.encode(texts, convert_to_tensor=False, normalize_embeddings=True)
+index = faiss.IndexFlatIP(EMBEDDING_DIM)
+index.add(np.array(embeddings))
+
+# === TRANSLATOR ===
+translator = Translator()
+
+def detect_language(text):
     try:
-        lang = detect(text)
-        if lang != "en":
-            return GoogleTranslator(source="auto", target="en").translate(text), lang
-        return text, "en"
+        return detect(text)
     except:
-        return text, "en"
+        return "en"
 
-def translate_back(text, target_lang):
+def translate(text, src, dest):
     try:
-        if target_lang != "en":
-            return GoogleTranslator(source="en", target=target_lang).translate(text)
-        return text
+        return translator.translate(text, src=src, dest=dest).text
     except:
         return text
 
-# === Main Q&A Processing ===
-def process_input(user_question, top_k=1):
-    try:
-        # Translate question to English
-        question_en, detected_lang = translate_to_english(user_question)
+def answer_question(query):
+    original_lang = detect_language(query)
+    query_en = translate(query, src=original_lang, dest="en")
 
-        # Embed and search
-        question_vector = EMBEDDINGS_MODEL.encode([question_en])
-        D, I = INDEX.search(np.array(question_vector).astype("float32"), top_k)
+    q_embed = model.encode([query_en], convert_to_tensor=False, normalize_embeddings=True)
+    D, I = index.search(np.array(q_embed), k=1)
 
-        # Get the most relevant answer
-        response = ""
-        for idx in I[0]:
-            if 0 <= idx < len(DOCUMENTS):
-                best_answer = DOCUMENTS[idx].strip()
-                # Highlight using red color in Markdown
-                response = f"<span style='color:red'><b>{best_answer}</b></span>"
-                break
+    if D[0][0] < 0.3:
+        return translate("Sorry, I couldn't find an answer.", src="en", dest=original_lang)
 
-        if not response:
-            fallback = "Sorry, I couldn’t find a relevant answer in your documents."
-            return translate_back(fallback, detected_lang)
+    matched_text = texts[I[0][0]]
+    answer_en = highlight_answer(matched_text, query_en)
+    final_answer = translate(answer_en, src="en", dest=original_lang)
+    return final_answer
 
-        return translate_back(response, detected_lang)
-
-    except Exception as e:
-        return f"⚠️ Error: {str(e)}"
+def highlight_answer(text, query):
+    pattern = re.compile(re.escape(query), re.IGNORECASE)
+    return pattern.sub(r'<span style="color:red"><b>\g<0></b></span>', text)
