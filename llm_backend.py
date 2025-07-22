@@ -1,59 +1,78 @@
 import os
+import re
 import faiss
-import torch
 import numpy as np
 from langdetect import detect
-from deep_translator import GoogleTranslator
 from sentence_transformers import SentenceTransformer
+from deep_translator import GoogleTranslator
 
-# Config
-TRANSCRIPTS_DIR = r"D:\llm project\my1"  # Change path if needed
-EMBED_DIM = 384
-EMBED_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+# === CONFIG ===
+TEXT_FOLDER = "my1"  # 📁 Place your .txt files in ./docs folder (same dir as app)
+MODEL_NAME = "all-MiniLM-L6-v2"
+model = SentenceTransformer(MODEL_NAME)
 
-# Load model
-model = SentenceTransformer(EMBED_MODEL)
+# === Clean & Chunk ===
+def clean_and_chunk(text):
+    text = re.sub(r"[^\x00-\x7F]+", " ", text)  # Remove emojis/non-ASCII
+    text = re.sub(r"\s{2,}", " ", text)
+    raw_chunks = re.split(r"\n\s*---\s*\n", text)
+    return [chunk.strip() for chunk in raw_chunks if len(chunk.strip()) > 50]
 
-# Load and embed all text files
-def load_knowledge_base():
-    texts, paths = [], []
-    for filename in os.listdir(TRANSCRIPTS_DIR):
-        if filename.endswith(".txt"):
-            path = os.path.join(TRANSCRIPTS_DIR, filename)
-            with open(path, "r", encoding="utf-8") as f:
-                text = f.read()
-                texts.append(text)
-                paths.append(path)
-    embeddings = model.encode(texts, convert_to_tensor=True).cpu().numpy()
-    return texts, embeddings
+# === Load & Embed ===
+def load_documents():
+    chunks = []
+    for file in os.listdir(TEXT_FOLDER):
+        if file.endswith(".txt"):
+            with open(os.path.join(TEXT_FOLDER, file), "r", encoding="utf-8") as f:
+                chunks += clean_and_chunk(f.read())
+    return chunks
 
-# FAISS index
-def build_faiss_index(embeddings):
-    index = faiss.IndexFlatL2(EMBED_DIM)
-    index.add(np.array(embeddings))
-    return index
+@st.cache_resource
+def build_knowledge_base():
+    chunks = load_documents()
+    embeddings = model.encode(chunks, convert_to_numpy=True)
+    index = faiss.IndexFlatL2(embeddings.shape[1])
+    index.add(embeddings)
+    return chunks, index, embeddings.shape[1]
 
-# Language helpers
-def translate(text, source, target):
-    if source == target:
+knowledge_base, faiss_index, dim = build_knowledge_base()
+
+# === Language Handling ===
+def detect_lang(text):
+    try:
+        return detect(text)
+    except:
+        return "en"
+
+def to_english(text):
+    lang = detect_lang(text)
+    if lang != "en":
+        try:
+            return GoogleTranslator(source=lang, target="en").translate(text), lang
+        except:
+            return text, "en"
+    return text, "en"
+
+def from_english(text, target_lang):
+    if target_lang == "en":
         return text
     try:
-        return GoogleTranslator(source=source, target=target).translate(text)
+        return GoogleTranslator(source="en", target=target_lang).translate(text)
     except:
         return text
 
-# Main: get answer
-def get_answer(query):
-    input_lang = detect(query)
-    query_en = translate(query, input_lang, "en")
+# === Main Logic ===
+def answer_question(query, original_lang):
+    query_en, detected_lang = to_english(query)
+    query_vec = model.encode([query_en], convert_to_numpy=True)
+    D, I = faiss_index.search(query_vec, k=1)
 
-    texts, embeddings = load_knowledge_base()
-    index = build_faiss_index(embeddings)
+    if I[0][0] < len(knowledge_base):
+        result = knowledge_base[I[0][0]]
+        final_answer = from_english(result, original_lang)
+        return final_answer
+    else:
+        return "Sorry, no relevant answer found."
 
-    query_vec = model.encode([query_en])[0]
-    D, I = index.search(np.array([query_vec]), k=1)
-    
-    best_text = texts[I[0][0]] if I[0][0] < len(texts) else "Sorry, no relevant answer found."
-    best_text_lang = translate(best_text, "en", input_lang)
-
-    return best_text_lang
+def load_available_languages():
+    return ["English", "Telugu"]
