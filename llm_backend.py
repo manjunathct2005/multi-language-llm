@@ -9,7 +9,7 @@ try:
 except LookupError:
     nltk.download("punkt")
 
-transcript_folder = "transcripts"
+transcript_folder = "my1"
 
 def load_transcripts():
     texts = []
