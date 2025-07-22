@@ -1,42 +1,29 @@
 import os
+import warnings
 import streamlit as st
 
-# UI Configuration
-st.set_page_config(page_title="Multilingual Q&A Tool", layout="centered")
-st.title("🌍 Multilingual Question Answering App")
+# === Suppress Warnings ===
+warnings.filterwarnings("ignore")
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
+os.environ["STREAMLIT_WATCHER_TYPE"] = "none"
 
-# Import backend
+# === Import Backend ===
 try:
-    from llm_backend import answer_question, load_available_languages
+    import llm_backend
 except ImportError:
-    st.error("❌ Could not import `llm_backend.py`. Please ensure it's in the same directory.")
+    st.error("❌ Could not import `llm_backend.py`. Please ensure it's in the same folder.")
     st.stop()
 
-# Sidebar Language Info
-st.sidebar.header("Language Settings")
-try:
-    supported_langs = load_available_languages()
-    st.sidebar.markdown("✅ Supported: " + ", ".join(supported_langs))
-except Exception as e:
-    st.sidebar.error("❌ Could not load languages.")
-    supported_langs = []
+# === Page Configuration ===
+st.set_page_config(page_title="🌍 Multilingual LLM App", layout="centered")
+st.title("🌐 Multilingual Question Answering")
+st.markdown("Ask a question in **English, Hindi, Telugu, or Kannada**")
 
-# Question Input
-query = st.text_input("❓ Ask your question (in English, Hindi, Telugu, Kannada):")
+# === Input Section ===
+query = st.text_input("📝 Enter your question")
 
+# === Process & Display Answer ===
 if query:
-    with st.spinner("🔍 Finding the best answer..."):
-        try:
-            answer, source = answer_question(query)
-            if answer:
-                st.success("✅ Answer:")
-                st.markdown(f"**{answer}**")
-                if source:
-                    st.caption(f"📁 From: `{source}`")
-            else:
-                st.warning("⚠️ No relevant answer found.")
-        except Exception as e:
-            st.error(f"❌ Error during answering: {e}")
-
-st.markdown("---")
-st.caption("🤖 Powered by local models. No internet/API required.")
+    with st.spinner("🔍 Searching for answer..."):
+        answer = llm_backend.answer_question(query)
+        st.success(f"💬 Answer:\n\n{answer}")
