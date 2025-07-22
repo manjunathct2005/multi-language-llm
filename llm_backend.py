@@ -1,109 +1,105 @@
+# llm_backend.py
+
 import os
-import re
-import faiss
+import glob
 import torch
 import numpy as np
+import re
+from deep_translator import DeeplTranslator
 from langdetect import detect
-from sentence_transformers import SentenceTransformer
-from deep_translator import GoogleTranslator
+from sentence_transformers import SentenceTransformer, util
+import faiss
 
-TEXT_FOLDER = "my1"
+# === Configuration ===
+TRANSCRIPT_DIR = "my1"  # Folder with your .txt files
 MODEL_NAME = "all-MiniLM-L6-v2"
+EMBEDDINGS_PATH = os.path.join("D:/hindupur_dataset", "embeddings1.pt")
 
-model = SentenceTransformer(MODEL_NAME)
+# === Load the embedding model ===
+embedding_model = SentenceTransformer(MODEL_NAME)
 
-# Clean and chunk logic
-def clean_and_chunk(text):
-    text = re.sub(r"[^\x00-\x7F]+", " ", text)  # Remove emojis/non-ASCII
-    text = re.sub(r"\s{2,}", " ", text)
-    text = re.sub(r"---+", "\n---\n", text)
-    text = re.sub(r"\n{2,}", "\n", text)
-    raw_chunks = re.split(r"\n\s*---\s*\n", text)
-    clean_chunks = []
-
-    for chunk in raw_chunks:
-        chunk = chunk.strip()
-        if not chunk or len(chunk) < 50:
-            continue
-        lines = chunk.split("\n")
-        cleaned = "\n".join([line.strip() for line in lines if line.strip()])
-        clean_chunks.append(cleaned)
-
-    return clean_chunks
-
-# Load and clean all documents
-def load_documents():
-    all_chunks = []
-    for file in os.listdir(TEXT_FOLDER):
-        if file.endswith(".txt"):
-            with open(os.path.join(TEXT_FOLDER, file), encoding="utf-8") as f:
-                text = f.read()
-                chunks = clean_and_chunk(text)
-                all_chunks.extend(chunks)
-    return all_chunks
-
-print("[✓] Loading documents...")
-knowledge_base = load_documents()
-print(f"[✓] Found {len(knowledge_base)} knowledge chunks.")
-
-print("[✓] Encoding with SentenceTransformer...")
-kb_embeddings = model.encode(knowledge_base, convert_to_numpy=True, show_progress_bar=True)
-
-dimension = kb_embeddings.shape[1]
-index = faiss.IndexFlatL2(dimension)
-index.add(kb_embeddings)
-print("[✓] FAISS index built.")
-
-# Language utils
-def translate_to_en(text):
+# === Translation ===
+def translate_to_english(text):
     try:
-        lang = detect(text)
-        if lang == "en":
-            return text.strip(), "en"
-        elif lang == "te":
-            translated = GoogleTranslator(source='te', target='en').translate(text)
-            return translated.strip(), "te"
-        else:
-            return text.strip(), "en"
+        return DeeplTranslator(source='auto', target='en').translate(text)
     except:
-        return text.strip(), "en"
+        return text
 
-def translate_back(text, lang):
+def translate_from_english(text, lang):
     if lang == "en":
         return text
     try:
-        return GoogleTranslator(source='en', target=lang).translate(text)
+        return DeeplTranslator(source='en', target=lang).translate(text)
     except:
         return text
 
-# Search logic
-def find_best_paragraph(query_en, top_k=3):
-    query_vector = model.encode([query_en], convert_to_numpy=True)
-    D, I = index.search(query_vector, top_k)
-    matches = []
-    for i, score in zip(I[0], D[0]):
-        if score < 1.1:
-            matches.append((knowledge_base[i], 1 - score))
-    return matches
+# === Clean each line ===
+def clean_text(text):
+    lines = text.splitlines()
+    cleaned = []
+    for line in lines:
+        line = line.strip()
 
-# Final answer logic
-def answer_question(query):
-    query = query.strip()
-    if not query:
-        return "Please enter a valid question."
+        # Skip empty or short lines
+        if len(line.split()) < 4:
+            continue
 
-    query_en, lang = translate_to_en(query)
+        # Remove headers like "Part 1", "Module 3", "Section 4", etc.
+        if re.match(r'^(part|chapter|module|section|page)[\s\d:.-]*$', line.lower()):
+            continue
 
-    if not knowledge_base:
-        return "No documents loaded."
+        # Remove headings like "What is Data Science", "Overview"
+        if re.match(r'^(what is|overview|definition|introduction)', line.lower()):
+            continue
 
-    matches = find_best_paragraph(query_en)
-    if matches:
-        best_text, _ = matches[0]
-        translated = translate_back(best_text, lang)
-        return translated.strip()
-    else:
-        return "No relevant answer found."
+        # Remove markdown symbols and unwanted characters
+        line = re.sub(r'[#*:\-•►●]', '', line)
+        line = re.sub(r'\s+', ' ', line)
 
-def load_available_languages():
-    return ["Auto-detect"]
+        cleaned.append(line)
+    return "\n".join(cleaned)
+
+# === Load and clean all text files ===
+def load_texts_and_embeddings():
+    if os.path.exists(EMBEDDINGS_PATH):
+        print("✅ Loading existing embeddings")
+        data = torch.load(EMBEDDINGS_PATH)
+        return data['texts'], data['index'], data['embeddings']
+
+    print("🔍 Generating new embeddings...")
+    texts = []
+    for filepath in glob.glob(os.path.join(TRANSCRIPT_DIR, "*.txt")):
+        with open(filepath, "r", encoding="utf-8") as f:
+            text = f.read()
+            clean = clean_text(text)
+            if clean.strip():
+                texts.append(clean)
+
+    embeddings = embedding_model.encode(texts, convert_to_tensor=False)
+    embeddings_np = np.array(embeddings).astype("float32")
+
+    index = faiss.IndexFlatL2(embeddings_np.shape[1])
+    index.add(embeddings_np)
+
+    torch.save({'texts': texts, 'index': index, 'embeddings': embeddings_np}, EMBEDDINGS_PATH)
+    return texts, index, embeddings_np
+
+# === Detect language ===
+def detect_language(text):
+    try:
+        return detect(text)
+    except:
+        return "en"
+
+# === Process question ===
+def process_input(user_input, texts, index):
+    lang = detect_language(user_input)
+    question_en = translate_to_english(user_input)
+    query_vec = embedding_model.encode([question_en])[0].astype("float32")
+
+    D, I = index.search(np.array([query_vec]), k=1)
+    if D[0][0] > 1.2:  # distance threshold
+        return translate_from_english("Sorry, I couldn't find a relevant answer.", lang)
+
+    best_answer = texts[I[0][0]]
+    return translate_from_english(best_answer, lang)
