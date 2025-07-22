@@ -1,60 +1,64 @@
 # llm_backend.py
+
 import os
 import torch
+import re
 import faiss
 import numpy as np
 from langdetect import detect
-from deep_translator import GoogleTranslator
 from sentence_transformers import SentenceTransformer, util
+from deep_translator import GoogleTranslator
 
 # === CONFIG ===
-TRANSCRIPT_FOLDER = r"D:\llm project\my1"
-EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+TEXT_FOLDER = r"D:\llm project\my1"  # Change if needed
+EMBEDDING_DIM = 384
+DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-# Load model and cached embeddings
-model = SentenceTransformer(EMBEDDING_MODEL, device=DEVICE)
-index = faiss.IndexFlatL2(384)
-corpus = []
-file_names = []
+# === Load embedding model ===
+embedding_model = SentenceTransformer("all-MiniLM-L6-v2", device=DEVICE)
 
-for fname in os.listdir(TRANSCRIPT_FOLDER):
-    if fname.endswith(".txt"):
-        with open(os.path.join(TRANSCRIPT_FOLDER, fname), 'r', encoding='utf-8') as f:
-            text = f.read()
-            corpus.append(text)
-            file_names.append(fname)
+# === Helper: Clean Text ===
+def clean_text(text):
+    return re.sub(r"\s+", " ", text.strip())
 
-corpus_embeddings = model.encode(corpus, convert_to_tensor=True)
-index.add(corpus_embeddings.cpu().detach().numpy())
+# === Load and Embed Transcripts ===
+def load_transcripts_and_embed():
+    texts, file_names = [], []
+    for file in os.listdir(TEXT_FOLDER):
+        if file.endswith(".txt"):
+            with open(os.path.join(TEXT_FOLDER, file), "r", encoding="utf-8") as f:
+                texts.append(clean_text(f.read()))
+                file_names.append(file)
 
-def detect_language(text):
-    try:
-        return detect(text)
-    except Exception:
-        return "en"
+    embeddings = embedding_model.encode(texts, convert_to_tensor=True, show_progress_bar=True)
+    return texts, embeddings, file_names
 
+# === Vector Store ===
+docs, doc_embeddings, file_names = load_transcripts_and_embed()
+
+# === Translation ===
 def translate_to_english(text, src_lang):
-    if src_lang == "en":
-        return text
     return GoogleTranslator(source=src_lang, target="en").translate(text)
 
 def translate_from_english(text, target_lang):
-    if target_lang == "en":
-        return text
     return GoogleTranslator(source="en", target=target_lang).translate(text)
 
-def get_answer(question: str) -> str:
-    input_lang = detect_language(question)
-    translated_question = translate_to_english(question, input_lang)
-    question_embedding = model.encode(translated_question, convert_to_tensor=True)
-    
-    D, I = index.search(question_embedding.cpu().detach().numpy().reshape(1, -1), k=1)
-    
-    if len(I[0]) == 0:
-        return translate_from_english("Sorry, I could not find an answer.", input_lang)
+# === Language-Aware Answering ===
+def get_answer(query: str) -> str:
+    try:
+        lang = detect(query)
+        translated_query = translate_to_english(query, lang)
 
-    matched_idx = I[0][0]
-    answer = corpus[matched_idx]
+        query_embedding = embedding_model.encode(translated_query, convert_to_tensor=True)
+        top_k = min(5, len(docs))
+        hits = util.semantic_search(query_embedding, doc_embeddings, top_k=top_k)[0]
 
-    return translate_from_english(answer, input_lang)
+        for hit in hits:
+            answer = docs[hit['corpus_id']]
+            translated_answer = translate_from_english(answer, lang)
+            return translated_answer
+
+        return translate_from_english("Sorry, I couldn’t find an answer.", lang)
+
+    except Exception as e:
+        return f"Error: {str(e)}"
