@@ -1,5 +1,9 @@
-streamlit
+torch
+torchaudio
 sentence-transformers
-faiss-cpu
 langdetect
-deep-translator
+transformers
+googletrans==4.0.0-rc1
+streamlit
+torch==2.1.0
+torchaudio==2.1.0
