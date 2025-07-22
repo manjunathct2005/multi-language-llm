@@ -7,7 +7,7 @@ from deep_translator import GoogleTranslator
 
 # Paths
 TRANSCRIPTS_DIR = "my1"
-EMBEDDINGS_PATH = "D:/hindupur_dataset/embeddings1.pt"
+EMBEDDINGS_PATH = "embeddings1.pt"  # Updated for GitHub relative path
 
 # Load model
 embedding_model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
@@ -31,14 +31,17 @@ def load_texts_and_embeddings():
                 texts.append(clean_text(content))
 
     if os.path.exists(EMBEDDINGS_PATH):
-        embeddings = torch.load(EMBEDDINGS_PATH)
+        try:
+            embeddings = torch.load(EMBEDDINGS_PATH)
+        except Exception as e:
+            print(f"⚠️ Error loading embeddings: {e}")
+            embeddings = embedding_model.encode(texts, show_progress_bar=True)
+            torch.save(embeddings, EMBEDDINGS_PATH)
     else:
         embeddings = embedding_model.encode(texts, show_progress_bar=True)
         torch.save(embeddings, EMBEDDINGS_PATH)
 
-    index = NearestNeighbors(n_neighbors=1, metric="cosine")
-    index.fit(embeddings)
-    return texts, index
+    return texts, embeddings
 
 def detect_language(text):
     try:
@@ -47,23 +50,24 @@ def detect_language(text):
         return "en"
 
 def translate_to_english(text, src_lang):
-    if src_lang == "en":
-        return text
-    return GoogleTranslator(source=src_lang, target="en").translate(text)
+    if src_lang != "en":
+        return GoogleTranslator(source=src_lang, target="en").translate(text)
+    return text
 
-def translate_back(text, dest_lang):
-    if dest_lang == "en":
-        return text
-    return GoogleTranslator(source="en", target=dest_lang).translate(text)
+def translate_from_english(text, target_lang):
+    if target_lang != "en":
+        return GoogleTranslator(source="en", target=target_lang).translate(text)
+    return text
 
-def answer_question(query, texts, index):
-    query_embedding = embedding_model.encode([query])
-    _, indices = index.kneighbors(query_embedding)
-    return texts[indices[0][0]]
+def get_answer(question, texts, embeddings, top_k=3):
+    question_lang = detect_language(question)
+    question_en = translate_to_english(question, question_lang)
 
-def process_input(user_input, texts, index):
-    source_lang = detect_language(user_input)
-    english_query = translate_to_english(user_input, source_lang)
-    answer_in_english = answer_question(english_query, texts, index)
-    answer_in_original_lang = translate_back(answer_in_english, source_lang)
-    return answer_in_original_lang
+    question_embedding = embedding_model.encode([question_en])
+    knn = NearestNeighbors(n_neighbors=top_k, metric="cosine")
+    knn.fit(embeddings)
+    distances, indices = knn.kneighbors(question_embedding)
+
+    results = [texts[idx] for idx in indices[0]]
+    combined_answer = " ".join(results)
+    return translate_from_english(combined_answer, question_lang)
