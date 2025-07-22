@@ -1,39 +1,58 @@
-import os
 import warnings
+import os
+import re
 import streamlit as st
-from llm_backend import (
-    load_knowledge_base,
-    detect_language,
-    translate_question,
-    retrieve_answer,
-)
+from llm_backend import process_input, knowledge_base  # make sure llm_backend.py is correct and in same folder
 
+# Suppress warnings and TensorFlow logs
 warnings.filterwarnings("ignore")
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
-os.environ["STREAMLIT_WATCHER_TYPE"] = "none"
 
-st.set_page_config(page_title="Multilingual LLM Tool", layout="centered")
+# Streamlit page config
+st.set_page_config(page_title="📚 Multilingual Knowledge Base", layout="wide")
+st.title("💡 Multilingual Knowledge Base Assistant")
+st.markdown("Ask in **Telugu**, **Hindi**, **Kannada**, or **English**. Clean answers from `.txt` transcripts.")
 
-st.title("🧠 Multilingual Q&A App")
-st.markdown("Ask questions in **Telugu, Hindi, Kannada, or English**. Get answers from transcripts!")
+# Check knowledge base load
+if not knowledge_base:
+    st.error("❌ Knowledge base not loaded. Please upload valid `.txt` files.")
+else:
+    st.success(f"✅ Loaded {len(knowledge_base)} knowledge blocks.")
 
-# === Load Model and Knowledge Base (no caching for unhashable types) ===
-with st.spinner("🔄 Loading model and knowledge base..."):
-    model, texts, index, embeddings = load_knowledge_base()
+# User input
+query = st.text_area("🔎 Ask your question here:", height=100, placeholder="E.g. హిందూపురం ఎవరి పేరు మీద ఉంది?")
+answer_type = st.radio("📝 Response Style:", ["Summary", "Detailed (Chat-style)"], horizontal=True)
 
-# === Input Section ===
-query = st.text_input("🔍 Enter your question:")
+# Process button
+if st.button("🚀 Get Answer"):
+    if not query.strip():
+        st.warning("⚠️ Please enter a valid question.")
+    elif not knowledge_base:
+        st.error("❌ Knowledge base is empty. Upload files first.")
+    else:
+        with st.spinner("🔍 Searching the knowledge base..."):
+            answer, confidence = process_input(query)
 
-if query:
-    with st.spinner("💬 Processing your question..."):
-        detected_lang = detect_language(query)
-        translated_q = translate_question(query, detected_lang)
-
-        answer = retrieve_answer(translated_q, model, texts, index, embeddings)
-
-        if answer:
-            st.success("✅ Answer:")
-            st.write(answer if detected_lang == "en" else translate_question(answer, "en", detected_lang))
+        # Handling different outcomes
+        if "Only Telugu" in answer or "empty" in answer:
+            st.error(f"❌ {answer}")
+        elif "No relevant answer" in answer:
+            st.warning(f"⚠️ {answer}")
         else:
-            st.warning("⚠️ No relevant answer found in the knowledge base.")
-            st.markdown(f"Try refining your question or [search on Google](https://www.google.com/search?q={query}) 🔍")
+            st.markdown(f"### ✅ Answer (Confidence: `{confidence}`)")
+            if answer_type == "Summary":
+                st.markdown("📘 **Summary Response:**")
+                for line in answer.split("\n"):
+                    line = line.strip()
+                    if line.startswith("-") or re.match(r"^\d+\.", line):
+                        st.markdown(f"- {line}")
+                    else:
+                        st.write(line)
+            else:
+                st.markdown("🧾 **Detailed Chat-style Response:**")
+                for para in answer.split("\n\n"):
+                    para = para.strip()
+                    if para.startswith("```") and para.endswith("```"):
+                        st.code(para.strip("```"))
+                    else:
+                        st.markdown(para)
