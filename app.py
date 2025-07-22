@@ -1,58 +1,47 @@
-import warnings
+# app.py
+
 import os
-import re
 import streamlit as st
-from llm_backend import process_input, knowledge_base  # make sure llm_backend.py is correct and in same folder
+from llm_backend import process_input, knowledge_base, detect_language
 
-# Suppress warnings and TensorFlow logs
-warnings.filterwarnings("ignore")
-os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
+st.set_page_config(page_title="Multilingual Knowledge Base Assistant", layout="centered")
 
-# Streamlit page config
-st.set_page_config(page_title="📚 Multilingual Knowledge Base", layout="wide")
-st.title("💡 Multilingual Knowledge Base Assistant")
+# Initialize
+TRANSCRIPT_DIR = "D:/hindupur_dataset/transcripts"
+SUPPORTED_LANGUAGES = ["en", "hi", "te"]
+
+# Load knowledge base
+texts, index, embeddings = knowledge_base(TRANSCRIPT_DIR)
+num_blocks = len(texts)
+
+# Header
+st.markdown("## 💡 Multilingual Knowledge Base Assistant")
 st.markdown("Ask in **Telugu**, **Hindi**, **Kannada**, or **English**. Clean answers from `.txt` transcripts.")
 
-# Check knowledge base load
-if not knowledge_base:
-    st.error("❌ Knowledge base not loaded. Please upload valid `.txt` files.")
+# Knowledge base status
+if num_blocks > 0:
+    st.success(f"✅ Loaded {num_blocks} knowledge blocks from `{TRANSCRIPT_DIR}`.")
 else:
-    st.success(f"✅ Loaded {len(knowledge_base)} knowledge blocks.")
+    st.warning("⚠️ No knowledge blocks found. Please add `.txt` transcripts.")
 
-# User input
-query = st.text_area("🔎 Ask your question here:", height=100, placeholder="E.g. హిందూపురం ఎవరి పేరు మీద ఉంది?")
-answer_type = st.radio("📝 Response Style:", ["Summary", "Detailed (Chat-style)"], horizontal=True)
+# Input box
+query = st.text_input("🔎 Ask your question here:")
 
-# Process button
+# Response style
+st.markdown("#### 📝 Response Style:")
+response_style = st.radio("", ["Summary", "Detailed (Chat-style)"], horizontal=True)
+
+# Submit button
 if st.button("🚀 Get Answer"):
-    if not query.strip():
-        st.warning("⚠️ Please enter a valid question.")
-    elif not knowledge_base:
-        st.error("❌ Knowledge base is empty. Upload files first.")
-    else:
-        with st.spinner("🔍 Searching the knowledge base..."):
-            answer, confidence = process_input(query)
 
-        # Handling different outcomes
-        if "Only Telugu" in answer or "empty" in answer:
-            st.error(f"❌ {answer}")
-        elif "No relevant answer" in answer:
-            st.warning(f"⚠️ {answer}")
+    if not query.strip():
+        st.error("❌ Please enter a valid question.")
+    else:
+        detected_lang = detect_language(query)
+
+        if detected_lang not in SUPPORTED_LANGUAGES:
+            st.error("❌ Only Telugu/English/Hindi questions are supported.")
         else:
-            st.markdown(f"### ✅ Answer (Confidence: `{confidence}`)")
-            if answer_type == "Summary":
-                st.markdown("📘 **Summary Response:**")
-                for line in answer.split("\n"):
-                    line = line.strip()
-                    if line.startswith("-") or re.match(r"^\d+\.", line):
-                        st.markdown(f"- {line}")
-                    else:
-                        st.write(line)
-            else:
-                st.markdown("🧾 **Detailed Chat-style Response:**")
-                for para in answer.split("\n\n"):
-                    para = para.strip()
-                    if para.startswith("```") and para.endswith("```"):
-                        st.code(para.strip("```"))
-                    else:
-                        st.markdown(para)
+            result = process_input(query, texts, index, embeddings, detected_lang, style=response_style)
+            st.markdown("### ✅ Answer:")
+            st.write(result)
