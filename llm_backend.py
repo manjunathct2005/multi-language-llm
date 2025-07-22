@@ -1,60 +1,23 @@
 import os
-import re
-import torch
-import numpy as np
-import faiss
-from langdetect import detect
-from deep_translator import GoogleTranslator
-from sentence_transformers import SentenceTransformer
+import streamlit as st
+from llm_backend import get_answer
 
-# === CONFIG ===
-TEXT_FOLDER = r"D:\llm project\my1"  # Replace with your actual path
-MODEL_NAME = "all-MiniLM-L6-v2"
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+st.set_page_config(page_title="Multilingual LLM Q&A", layout="centered")
 
-# === LOAD MODEL ===
-model = SentenceTransformer(MODEL_NAME, device=DEVICE)
+st.title("🌐 Multilingual Q&A using Local LLM")
+st.markdown("Ask any question in your language. The app will respond in the same language.")
 
-# === TRANSLATION ===
-def translate_to_english(text):
-    try:
-        return GoogleTranslator(source='auto', target='en').translate(text)
-    except Exception:
-        return text
+# === User Input ===
+user_input = st.text_input("📝 Ask a question:")
 
-def translate_back(text, target_lang):
-    try:
-        return GoogleTranslator(source='en', target=target_lang).translate(text)
-    except Exception:
-        return text
-
-# === LOAD & EMBED KNOWLEDGE BASE ===
-def clean_text(text):
-    text = re.sub(r"\s+", " ", text.strip())
-    text = re.sub(r"(.)\1{3,}", r"\1", text)
-    return text
-
-def load_knowledge_base(folder):
-    texts, files = [], []
-    for fname in os.listdir(folder):
-        if fname.endswith(".txt"):
-            with open(os.path.join(folder, fname), 'r', encoding='utf-8') as f:
-                content = f.read()
-                texts.append(clean_text(content))
-                files.append(fname)
-    embeddings = model.encode(texts, convert_to_tensor=False, normalize_embeddings=True)
-    index = faiss.IndexFlatL2(embeddings[0].shape[0])
-    index.add(np.array(embeddings))
-    return texts, index, files, np.array(embeddings)
-
-kb_texts, kb_index, kb_files, kb_embeddings = load_knowledge_base(TEXT_FOLDER)
-
-# === MAIN FUNCTION ===
-def get_answer(question):
-    lang = detect(question)
-    q_en = translate_to_english(question)
-    q_embedding = model.encode([q_en], normalize_embeddings=True)
-    D, I = kb_index.search(np.array(q_embedding), k=1)
-    top_match = kb_texts[I[0][0]]
-    ans = top_match if D[0][0] < 0.4 else "Sorry, I couldn't find a relevant answer."
-    return translate_back(ans, lang)
+# === Process ===
+if st.button("Get Answer"):
+    if user_input.strip() == "":
+        st.warning("Please enter a valid question.")
+    else:
+        with st.spinner("Processing..."):
+            try:
+                response = get_answer(user_input)
+                st.success(f"💬 Answer: {response}")
+            except Exception as e:
+                st.error(f"❌ Error: {str(e)}")
