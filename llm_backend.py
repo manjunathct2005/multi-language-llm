@@ -20,7 +20,7 @@ def clean_text(text):
     cleaned = '. '.join([line.strip() for line in lines if len(line.strip()) > 15])
     return cleaned
 
-def load_transcripts(transcript_dir="D:/hindupur_dataset/transcripts"):
+def load_transcripts(transcript_dir="my1"):
     texts, embeddings = [], []
     seen_texts = set()
 
