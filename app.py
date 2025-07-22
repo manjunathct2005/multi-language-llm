@@ -1,22 +1,18 @@
-# app.py
-
 import streamlit as st
 from llm_backend import search_answer
 
 st.set_page_config(page_title="Multilingual Q&A App", layout="centered")
-st.title("🧠 Multilingual Q&A from My Text Files")
+st.title("🌍 Multilingual LLM Assistant")
+st.markdown("Ask any question in **Hindi, Telugu, Kannada, or English**.")
 
-with st.form("query_form"):
-    user_query = st.text_area("Ask a question in any language:", height=150)
-    submitted = st.form_submit_button("🔍 Get Answer")
+# Input
+user_input = st.text_area("🔤 Enter your question:", height=100)
 
-if submitted and user_query.strip():
-    with st.spinner("Searching the best answer..."):
-        try:
-            response = search_answer(user_query)
+if st.button("Get Answer"):
+    if user_input.strip() == "":
+        st.warning("Please enter a question first.")
+    else:
+        with st.spinner("Thinking..."):
+            response = search_answer(user_input)
             st.success("✅ Answer:")
-            st.markdown(response)
-        except Exception as e:
-            st.error(f"❌ Error occurred: {str(e)}")
-else:
-    st.info("Enter your question and press the button to get started.")
+            st.write(response)
