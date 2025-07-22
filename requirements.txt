@@ -1,6 +1,6 @@
 transformers==4.40.1
 sentence-transformers==2.7.0
-whisper @ git+https://github.com/openai/whisper.git
+openai-whisper
 ffmpeg-python==0.2.0
 langdetect==1.0.9
 googletrans==4.0.0rc1
