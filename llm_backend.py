@@ -1,67 +1,82 @@
 import os
-import numpy as np
-from sentence_transformers import SentenceTransformer
-from sklearn.metrics.pairwise import cosine_similarity
+import torch
 import faiss
+import numpy as np
 from langdetect import detect
 from deep_translator import GoogleTranslator
+from sentence_transformers import SentenceTransformer
 
+# === CONFIG ===
 TEXT_FOLDER = r"D:\llm project\my1"
-MODEL_NAME = "sentence-transformers/distiluse-base-multilingual-cased-v1"
-model = SentenceTransformer(MODEL_NAME)
+EMBEDDING_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 
-# Load all text files as knowledge base
-def load_knowledge_base():
-    documents = []
-    file_names = []
-    for filename in os.listdir(TEXT_FOLDER):
-        if filename.endswith(".txt"):
-            path = os.path.join(TEXT_FOLDER, filename)
-            with open(path, "r", encoding="utf-8") as f:
-                content = f.read().strip()
-                if content:
-                    documents.append(content)
-                    file_names.append(filename)
-    embeddings = model.encode(documents, show_progress_bar=True)
-    index = faiss.IndexFlatL2(embeddings.shape[1])
-    index.add(np.array(embeddings).astype("float32"))
-    return documents, index, embeddings
+# Load model
+model = SentenceTransformer(EMBEDDING_MODEL_NAME)
 
-DOCUMENTS, INDEX, EMBEDDINGS = load_knowledge_base()
-
-# Translate question to English
-def translate_to_english(text):
-    lang = detect(text)
-    if lang != "en":
-        try:
-            return GoogleTranslator(source='auto', target='en').translate(text), lang
-        except:
-            return text, lang
-    return text, "en"
-
-# Translate English answer back to original language
-def translate_back(text, target_lang):
-    if target_lang != "en":
-        try:
-            return GoogleTranslator(source='en', target=target_lang).translate(text)
-        except:
-            return text
-    return text
-
-# Main function to generate response
-def answer_question(user_question, top_k=1):
+# === Utility Functions ===
+def detect_language(text):
     try:
-        question_en, orig_lang = translate_to_english(user_question)
-        question_vector = model.encode([question_en])
-        D, I = INDEX.search(np.array(question_vector).astype("float32"), top_k)
+        return detect(text)
+    except:
+        return "en"
 
-        if I[0][0] < len(DOCUMENTS):
-            answer = DOCUMENTS[I[0][0]].strip()
-        else:
-            return translate_back("Sorry, no relevant answer found in your data.", orig_lang)
+def translate_to_english(text, src_lang):
+    if src_lang == "en":
+        return text
+    try:
+        return GoogleTranslator(source=src_lang, target="en").translate(text)
+    except:
+        return text
 
-        final_answer = translate_back(answer, orig_lang)
-        return f"🔍 **Answer**:\n\n<span style='color:red'>{final_answer}</span>", orig_lang
+def translate_to_original(text, target_lang):
+    if target_lang == "en":
+        return text
+    try:
+        return GoogleTranslator(source="en", target=target_lang).translate(text)
+    except:
+        return text
 
-    except Exception as e:
-        return f"⚠️ Error: {str(e)}", "en"
+def load_transcripts():
+    texts = []
+    sources = []
+    for file in os.listdir(TEXT_FOLDER):
+        if file.endswith(".txt"):
+            path = os.path.join(TEXT_FOLDER, file)
+            with open(path, "r", encoding="utf-8") as f:
+                content = f.read()
+                texts.append(content)
+                sources.append(file)
+    return texts, sources
+
+def embed_texts(texts):
+    return model.encode(texts, convert_to_tensor=False, normalize_embeddings=True)
+
+def build_faiss_index(embeddings):
+    dimension = embeddings[0].shape[0]
+    index = faiss.IndexFlatIP(dimension)
+    index.add(np.array(embeddings))
+    return index
+
+# === Load Transcripts and Embeddings ===
+CHUNKS, SOURCES = load_transcripts()
+CHUNK_EMBEDDINGS = embed_texts(CHUNKS)
+INDEX = build_faiss_index(CHUNK_EMBEDDINGS)
+
+# === Main Q&A ===
+def answer_question(user_question):
+    input_lang = detect_language(user_question)
+    english_question = translate_to_english(user_question, input_lang)
+
+    question_embedding = model.encode([english_question], convert_to_tensor=False, normalize_embeddings=True)
+    D, I = INDEX.search(np.array(question_embedding), k=1)
+
+    best_idx = I[0][0]
+    score = D[0][0]
+
+    if score < 0.4:
+        return None, None
+
+    answer_english = CHUNKS[best_idx]
+    answer_translated = translate_to_original(answer_english, input_lang)
+
+    return answer_translated.strip(), SOURCES[best_idx]
