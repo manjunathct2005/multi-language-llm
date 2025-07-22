@@ -1,87 +1,86 @@
 import os
 import torch
-import glob
-import re
-from sentence_transformers import SentenceTransformer, util
-from deep_translator import GoogleTranslator
+from sklearn.neighbors import NearestNeighbors
 from langdetect import detect
-import warnings
+from deep_translator import GoogleTranslator
 
-warnings.filterwarnings("ignore")
+# Constants
+TRANSCRIPTS_DIR = "my1"  # Folder with .txt files
+EMBEDDINGS_PATH = "D:/hindupur_dataset/embeddings1.pt"  # Must be precomputed and uploaded
+K_NEIGHBORS = 3
 
-TRANSCRIPT_DIR = "my1"
-EMBEDDINGS_PATH = "embeddings1.pt"
-MODEL_PATH = "models/sentence-transformers/all-MiniLM-L6-v2"
-
-# Load embedding model
-embedding_model = SentenceTransformer(MODEL_PATH)
-
+# Clean transcript text lines
 def clean_text(text):
-    """Remove irrelevant words like part1, symbols like #, *, and extra spaces."""
-    text = re.sub(r"(part\s*\d+|#|\*|\-|\s{2,}|`+)", " ", text, flags=re.IGNORECASE)
-    text = re.sub(r"\s+", " ", text)
-    return text.strip()
+    lines = text.splitlines()
+    cleaned = []
+    for line in lines:
+        line = line.strip()
+        if line and not any(line.lower().startswith(x) for x in ("part", "#", "*", "what is data", "datasci")):
+            cleaned.append(line)
+    return " ".join(cleaned)
 
+# Load .txt files and embeddings
 def load_texts_and_embeddings():
     texts = []
-    text_files = glob.glob(os.path.join(TRANSCRIPT_DIR, "*.txt"))
-    print(f"🔍 Found {len(text_files)} transcript files")
+    files = sorted([f for f in os.listdir(TRANSCRIPTS_DIR) if f.endswith(".txt")])
+    for file in files:
+        with open(os.path.join(TRANSCRIPTS_DIR, file), "r", encoding="utf-8") as f:
+            content = f.read()
+            texts.append(clean_text(content))
 
-    for file_path in text_files:
-        with open(file_path, "r", encoding="utf-8") as f:
-            text = f.read()
-            cleaned = clean_text(text)
-            if len(cleaned) > 20:
-                texts.append(cleaned)
+    if not os.path.exists(EMBEDDINGS_PATH):
+        raise FileNotFoundError(f"Embeddings not found at {EMBEDDINGS_PATH}")
+    embeddings = torch.load(EMBEDDINGS_PATH)
 
-    if os.path.exists(EMBEDDINGS_PATH):
-        print("📦 Loading cached embeddings...")
-        embeddings = torch.load(EMBEDDINGS_PATH)
-    else:
-        print("🧠 Generating embeddings...")
-        embeddings = embedding_model.encode(texts, convert_to_tensor=True)
-        torch.save(embeddings, EMBEDDINGS_PATH)
+    index = NearestNeighbors(n_neighbors=min(K_NEIGHBORS, len(embeddings)), metric="cosine")
+    index.fit(embeddings)
 
-    return texts, embeddings
+    return texts, index
 
-def detect_language(text):
+# Translate to English
+def translate_to_english(text):
     try:
-        return detect(text)
+        return GoogleTranslator(source="auto", target="en").translate(text)
     except:
-        return "en"
+        return text  # Fallback if translation fails
 
-def translate_to_english(text, source_lang):
-    if source_lang == "en":
-        return text
-    try:
-        return GoogleTranslator(source=source_lang, target="en").translate(text)
-    except:
-        return text
-
+# Translate back to original language
 def translate_from_english(text, target_lang):
-    if target_lang == "en":
-        return text
     try:
-        if len(text) < 3 or len(text) > 4999:
-            return text
+        if len(text.strip()) < 3:
+            return "🤖 I couldn't find a meaningful answer."
         return GoogleTranslator(source="en", target=target_lang).translate(text)
     except:
-        return text
+        return text  # Fallback if translation fails
 
-def get_answer(question, texts, embeddings):
-    question_lang = detect_language(question)
-    question_en = translate_to_english(question, question_lang)
+# Get nearest answer
+def get_answer(query, texts, index, embeddings):
+    if not query.strip():
+        return "🤖 Please enter a valid question."
 
-    question_embedding = embedding_model.encode(question_en, convert_to_tensor=True)
-    scores = util.cos_sim(question_embedding, embeddings)[0]
+    try:
+        # Detect language
+        query_lang = detect(query)
+        english_query = translate_to_english(query)
 
-    top_k = min(3, len(texts))
-    top_indices = torch.topk(scores, k=top_k).indices
-    top_responses = [texts[i] for i in top_indices]
+        # Embed query using existing SentenceTransformer model (already used to create embeddings1.pt)
+        from sentence_transformers import SentenceTransformer
+        temp_model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+        query_embedding = temp_model.encode([english_query])
 
-    combined_answer = " ".join(top_responses)
-    translated = translate_from_english(combined_answer, question_lang)
-    return translated
+        # Search top-k answers
+        distances, indices = index.kneighbors(query_embedding)
+        top_indices = indices[0]
 
-def process_input(question, texts, embeddings):
-    return get_answer(question, texts, embeddings)
+        # Combine top answers
+        combined_answer = " ".join([texts[i] for i in top_indices])
+
+        # Translate back to original input language
+        return translate_from_english(combined_answer, query_lang)
+    except Exception as e:
+        return f"⚠️ Error: {str(e)}"
+
+# Public interface
+def process_input(question, texts, index):
+    embeddings = torch.load(EMBEDDINGS_PATH)
+    return get_answer(question, texts, index, embeddings)
