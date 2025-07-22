@@ -1,16 +1,15 @@
 import streamlit as st
 from llm_backend import get_answer
 
-st.set_page_config(page_title="Multilingual LLM QA", layout="centered")
-st.title("🌍 Multilingual Q&A App")
+st.set_page_config(page_title="Multilingual LLM Q&A", layout="centered")
+st.title("🌍 Multilingual LLM QA Tool")
 
-question = st.text_input("Enter your question (Hindi, Telugu, Kannada, or English):")
+st.write("Ask a question in **Hindi, Telugu, Kannada, or English**.")
 
-if st.button("Get Answer"):
-    if question:
-        with st.spinner("Thinking..."):
-            answer = get_answer(question)
-        st.success("Answer:")
-        st.write(answer)
-    else:
-        st.warning("Please enter a question.")
+query = st.text_input("Enter your question:", "")
+
+if query:
+    with st.spinner("Generating answer..."):
+        answer = get_answer(query)
+    st.success("✅ Answer:")
+    st.write(answer)
