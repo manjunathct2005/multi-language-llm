@@ -1,17 +1,20 @@
 import streamlit as st
-from llm_backend import answer_question
+from llm_backend import answer_question, load_available_languages
 
 st.set_page_config(page_title="Multilingual Q&A", layout="centered")
-st.markdown("<h2 style='text-align: center;'>🌍 Multilingual Q&A System</h2>", unsafe_allow_html=True)
+st.title("🌍 Multilingual Q&A Tool")
 
-st.markdown("Type your question in **English**, **Hindi**, **Telugu**, **Kannada**, or other supported languages.")
+st.markdown("Ask your question in any supported language (e.g., English, Hindi, Telugu, Kannada) and get the answer in the same language.")
 
-user_input = st.text_input("💬 Enter your question:")
+question = st.text_input("🔍 Enter your question:")
 
-if st.button("Get Answer"):
-    if user_input.strip() == "":
-        st.warning("Please enter a question.")
-    else:
-        with st.spinner("Searching for the best answer..."):
-            answer, lang = answer_question(user_input)
-            st.markdown(answer, unsafe_allow_html=True)
+if question:
+    with st.spinner("Processing..."):
+        answer, source = answer_question(question)
+
+        if answer:
+            st.markdown(f"### ✅ Answer:\n<span style='color:red'>{answer}</span>", unsafe_allow_html=True)
+            if source:
+                st.markdown(f"**📁 Source:** `{source}`")
+        else:
+            st.warning("Sorry, I couldn't find a relevant answer.")
