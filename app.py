@@ -1,58 +1,55 @@
-# Ensure required modules are installed
+# Ensure required modules are installed:
 # pip install streamlit sentence-transformers faiss-cpu googletrans==4.0.0-rc1 langdetect
 
 import streamlit as st
 from llm_backend import process_input, knowledge_base
 import warnings
-import re
 
 # Suppress warnings
 warnings.filterwarnings("ignore")
 
-# UI Config
+# === Streamlit Config ===
 st.set_page_config(page_title="📚 Multilingual Knowledge Base", layout="wide")
 st.title("💡 Multilingual Knowledge Base Assistant")
-st.markdown("Ask in **Telugu** or **English**. You'll get clean responses from your `.txt` knowledge base.")
+st.markdown("Ask your question in **Telugu** or **English**. This assistant will search your local `.txt` knowledge base and respond in the same language.")
 
-# Status of knowledge base
+# === Knowledge Base Check ===
 if not knowledge_base:
-    st.error("❌ Knowledge base not loaded.")
+    st.error("❌ Knowledge base not loaded or empty.")
 else:
-    st.success(f"✅ {len(knowledge_base)} knowledge blocks loaded.")
+    st.success(f"✅ {len(knowledge_base)} knowledge chunks loaded successfully.")
 
-# User input
-query = st.text_area("📝 Ask your question here:", height=100)
+# === User Input ===
+query = st.text_area("📝 Ask a question:", height=100, placeholder="E.g. మనిషి శరీరంలో రక్త ప్రసరణ ఎలా జరుగుతుంది?")
 answer_type = st.radio("🎛️ Choose Response Style:", ["Summary", "Detailed (Chat-style)"], horizontal=True)
 
-# Handle button
+# === Handle Query ===
 if st.button("🔍 Get Answer"):
     if not query.strip():
-        st.warning("⚠️ Please enter a question.")
+        st.warning("⚠️ Please enter a question to continue.")
     elif not knowledge_base:
-        st.error("❌ Knowledge base is empty.")
+        st.error("❌ No knowledge base found. Please check `D:/hindupur_dataset/my1` folder.")
     else:
         with st.spinner("🔎 Searching your knowledge base..."):
             answer, info = process_input(query)
 
-        if "Only Telugu" in answer or "empty" in answer:
-            st.error(f"❌ {answer}")
-        elif "No relevant answer" in answer:
-            st.warning(f"⚠️ {answer}")
+        if info == "en" or isinstance(info, str):
+            score_display = f"🧠 **Match Score:** {info}" if info.replace('.', '', 1).isdigit() else ""
         else:
-            st.markdown(f"### ✅ Answer (Confidence Score: `{info}`)")
+            score_display = ""
 
-            if answer_type == "Summary":
-                st.markdown("📘 **Summary:**")
-                for line in answer.split("\n"):
-                    if line.strip().startswith("-") or re.match(r"^\d+\.", line.strip()):
-                        st.markdown(f"- {line.strip()}")
-                    else:
-                        st.write(line.strip())
-            else:
-                st.markdown("🧾 **Detailed Response:**")
-                for para in answer.split("\n\n"):
-                    para = para.strip()
-                    if para.startswith("```") and para.endswith("```"):
-                        st.code(para.strip("```"))
-                    else:
-                        st.markdown(para)
+        if answer_type == "Summary":
+            st.subheader("✅ Answer (Summary)")
+            st.markdown(f"{answer}")
+            if score_display:
+                st.caption(score_display)
+        else:
+            st.subheader("🧠 Answer (Chat-style)")
+            st.markdown(f"**You asked:** {query}")
+            st.markdown(f"**Assistant replied:** {answer}")
+            if score_display:
+                st.caption(score_display)
+
+# === Footer ===
+st.markdown("---")
+st.markdown("Built with ❤️ using local `.txt` knowledge files and multilingual embedding search.")
