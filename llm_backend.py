@@ -1,65 +1,76 @@
 import os
-import torch
-from transformers import pipeline
-from sentence_transformers import SentenceTransformer, util
+import re
+import nltk
 from langdetect import detect
+from difflib import get_close_matches
 
-# Load sentence transformer from Hugging Face hub
-embedder = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+# Download once
+nltk.download("punkt")
 
-# Load translation models (from Hugging Face)
-translator_en_hi = pipeline("translation", model="Helsinki-NLP/opus-mt-en-hi")
-translator_hi_en = pipeline("translation", model="Helsinki-NLP/opus-mt-hi-en")
-translator_multi = pipeline("translation", model="facebook/mbart-large-50-many-to-many-mmt")
+# Folder where .txt transcripts are stored
+transcript_folder = "my1"
 
-# Cache to avoid reloading
-transcript_folder = "transcripts"
-embedding_cache_path = "embeddings.pt"
+# Clean text: remove repeated lines, symbols, etc.
+def clean_text(text):
+    # Remove special characters and multiple spaces
+    text = re.sub(r"\s+", " ", text)
+    text = re.sub(r"[^a-zA-Z0-9.,?!\s]", "", text)
+    # Remove repeated lines
+    lines = text.split(".")
+    seen = set()
+    unique_lines = []
+    for line in lines:
+        line = line.strip()
+        if line and line.lower() not in seen:
+            seen.add(line.lower())
+            unique_lines.append(line)
+    return ". ".join(unique_lines)
 
+# Load and clean all transcript text files
 def load_transcripts():
     texts = []
-    for fname in os.listdir(transcript_folder):
-        if fname.endswith(".txt"):
-            with open(os.path.join(transcript_folder, fname), "r", encoding="utf-8") as f:
-                texts.append(f.read())
+    for file in os.listdir(transcript_folder):
+        if file.endswith(".txt"):
+            with open(os.path.join(transcript_folder, file), "r", encoding="utf-8") as f:
+                raw_text = f.read()
+                cleaned = clean_text(raw_text)
+                texts.append(cleaned)
     return texts
 
-def get_embeddings(texts):
-    if os.path.exists(embedding_cache_path):
-        return torch.load(embedding_cache_path)
-    embeddings = embedder.encode(texts, convert_to_tensor=True)
-    torch.save(embeddings, embedding_cache_path)
-    return embeddings
-
+# Very basic language detection
 def detect_language(text):
     try:
         return detect(text)
     except:
         return "en"
 
+# Dummy translation passthrough (optional to customize later)
 def translate_to_english(text, lang):
-    if lang == "hi":
-        return translator_hi_en(text)[0]["translation_text"]
-    elif lang in ["te", "kn"]:
-        return translator_multi(text, src_lang=lang, tgt_lang="en")[0]["translation_text"]
     return text
 
 def translate_back(text, lang):
-    if lang == "hi":
-        return translator_en_hi(text)[0]["translation_text"]
-    elif lang in ["te", "kn"]:
-        return translator_multi(text, src_lang="en", tgt_lang=lang)[0]["translation_text"]
     return text
 
-def answer_question(query, texts, embeddings):
+# Main question answering function
+def answer_question(query, texts):
     lang = detect_language(query)
     query_en = translate_to_english(query, lang)
-    query_embedding = embedder.encode(query_en, convert_to_tensor=True)
-    scores = util.cos_sim(query_embedding, embeddings)[0]
-    best_idx = torch.argmax(scores).item()
-    best_answer = texts[best_idx]
-    return translate_back(best_answer, lang)
 
-# Initialization
+    # Use keyword-based approximate matching
+    best_match = ""
+    best_score = 0
+
+    for text in texts:
+        sentences = nltk.sent_tokenize(text.lower())
+        matches = get_close_matches(query_en.lower(), sentences, n=1, cutoff=0.4)
+        if matches:
+            best_match = matches[0]
+            best_score = 1
+
+    if best_score > 0:
+        return translate_back(best_match.capitalize(), lang)
+    else:
+        return translate_back("❌ Sorry, no relevant answer found in the knowledge base.", lang)
+
+# Preload transcript texts
 texts = load_transcripts()
-embeddings = get_embeddings(texts)
