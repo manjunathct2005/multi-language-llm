@@ -6,71 +6,70 @@ import faiss
 from langdetect import detect
 from deep_translator import GoogleTranslator
 
-# Folder where .txt files are stored
-TEXT_FOLDER = r"\my1"
+# === CONFIG ===
+TEXT_FOLDER = "my1"  # Update if needed
+EMBEDDINGS_MODEL = SentenceTransformer("sentence-transformers/distiluse-base-multilingual-cased-v1")
 
-# Load sentence transformer model
-MODEL = SentenceTransformer("sentence-transformers/distiluse-base-multilingual-cased-v1")
-
-# Preload all sentences and build FAISS index
-def load_chunks_and_embeddings():
-    chunks = []
-    chunk_sources = []
-
-    for file in os.listdir(TEXT_FOLDER):
-        if file.endswith(".txt"):
-            path = os.path.join(TEXT_FOLDER, file)
-            with open(path, "r", encoding="utf-8") as f:
-                text = f.read()
-                # Split text into small chunks (sentences or paragraphs)
-                for para in text.split("\n\n"):
-                    clean_para = para.strip()
-                    if 20 < len(clean_para) < 1000:  # reasonable size
-                        chunks.append(clean_para)
-                        chunk_sources.append(file)
-
-    embeddings = MODEL.encode(chunks)
+# === Load Texts and Embeddings ===
+def load_knowledge_base():
+    documents = []
+    file_names = []
+    for filename in os.listdir(TEXT_FOLDER):
+        if filename.endswith(".txt"):
+            with open(os.path.join(TEXT_FOLDER, filename), "r", encoding="utf-8") as f:
+                text = f.read().strip()
+                if text:  # Skip empty files
+                    documents.append(text)
+                    file_names.append(filename)
+    embeddings = EMBEDDINGS_MODEL.encode(documents, show_progress_bar=False)
     index = faiss.IndexFlatL2(embeddings.shape[1])
     index.add(np.array(embeddings).astype("float32"))
-    return chunks, chunk_sources, index
+    return documents, index, embeddings
 
-CHUNKS, SOURCES, INDEX = load_chunks_and_embeddings()
+DOCUMENTS, INDEX, EMBEDDINGS = load_knowledge_base()
 
-# Translate to English if not already
+# === Translation ===
 def translate_to_english(text):
-    lang = detect(text)
-    if lang != "en":
-        try:
+    try:
+        lang = detect(text)
+        if lang != "en":
             return GoogleTranslator(source="auto", target="en").translate(text), lang
-        except:
-            return text, lang
-    return text, "en"
+        return text, "en"
+    except:
+        return text, "en"
 
-# Translate back to original language
-def translate_back_to_lang(text, target_lang):
-    if target_lang != "en":
-        try:
+def translate_back(text, target_lang):
+    try:
+        if target_lang != "en":
             return GoogleTranslator(source="en", target=target_lang).translate(text)
-        except:
-            return text
-    return text
+        return text
+    except:
+        return text
 
-# Final input processing
+# === Main Q&A Processing ===
 def process_input(user_question, top_k=1):
     try:
-        translated_qn, original_lang = translate_to_english(user_question)
-        question_embedding = MODEL.encode([translated_qn])
-        D, I = INDEX.search(np.array(question_embedding).astype("float32"), top_k)
+        # Translate question to English
+        question_en, detected_lang = translate_to_english(user_question)
 
-        top_chunk = CHUNKS[I[0][0]].strip()
-        source_file = SOURCES[I[0][0]]
+        # Embed and search
+        question_vector = EMBEDDINGS_MODEL.encode([question_en])
+        D, I = INDEX.search(np.array(question_vector).astype("float32"), top_k)
 
-        # Translate back if original question was not in English
-        final_answer = translate_back_to_lang(top_chunk, original_lang)
+        # Get the most relevant answer
+        response = ""
+        for idx in I[0]:
+            if 0 <= idx < len(DOCUMENTS):
+                best_answer = DOCUMENTS[idx].strip()
+                # Highlight using red color in Markdown
+                response = f"<span style='color:red'><b>{best_answer}</b></span>"
+                break
 
-        # Add red-colored title using HTML
-        html_response = f"<span style='color:red'><b>📌 Most Relevant Answer (from {source_file}):</b></span><br><br>{final_answer}"
-        return html_response
+        if not response:
+            fallback = "Sorry, I couldn’t find a relevant answer in your documents."
+            return translate_back(fallback, detected_lang)
+
+        return translate_back(response, detected_lang)
 
     except Exception as e:
-        return f"<span style='color:red'>⚠️ Error:</span> {str(e)}"
+        return f"⚠️ Error: {str(e)}"
