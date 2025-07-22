@@ -1,7 +1,7 @@
-openai-whisper
-torch
-transformers
+streamlit
+faiss-cpu
 sentence-transformers
 langdetect
-faiss-cpu
 deep-translator
+torch
+numpy
