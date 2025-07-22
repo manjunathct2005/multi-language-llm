@@ -1,8 +1,5 @@
 streamlit
 transformers
-sentence-transformers
 torch
-torchaudio
-openai-whisper
+sentence-transformers
 langdetect
-deep-translator
