@@ -7,9 +7,8 @@ from deep_translator import GoogleTranslator
 
 # Paths
 TRANSCRIPTS_DIR = "my1"
-EMBEDDINGS_PATH = "embeddings1.pt"  # Updated for GitHub relative path
+EMBEDDINGS_PATH = "embeddings1.pt"
 
-# Load model
 embedding_model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
 
 def clean_text(text):
@@ -34,7 +33,7 @@ def load_texts_and_embeddings():
         try:
             embeddings = torch.load(EMBEDDINGS_PATH)
         except Exception as e:
-            print(f"⚠️ Error loading embeddings: {e}")
+            print(f"Error loading embeddings: {e}")
             embeddings = embedding_model.encode(texts, show_progress_bar=True)
             torch.save(embeddings, EMBEDDINGS_PATH)
     else:
@@ -71,3 +70,7 @@ def get_answer(question, texts, embeddings, top_k=3):
     results = [texts[idx] for idx in indices[0]]
     combined_answer = " ".join(results)
     return translate_from_english(combined_answer, question_lang)
+
+# ✅ Add this function so app.py works
+def process_input(question, texts, embeddings):
+    return get_answer(question, texts, embeddings)
