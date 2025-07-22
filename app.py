@@ -1,34 +1,28 @@
+import warnings
 import os
 import streamlit as st
-from llm_backend import process_input
+from llm_backend import answer_question
 
-# Set up Streamlit UI
-st.set_page_config(page_title="Multilingual LLM", layout="centered")
-st.markdown("<h2 style='text-align: center;'>🌐 Multilingual LLM Tool</h2>", unsafe_allow_html=True)
+# Suppress warnings and logs
+warnings.filterwarnings("ignore")
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
+os.environ["STREAMLIT_WATCHER_TYPE"] = "none"
 
-# Input box
-query = st.text_input("💬 Enter your question:", placeholder="Type here in Hindi, Telugu, Kannada, or English...")
+# Streamlit UI setup
+st.set_page_config(page_title="Multilingual LLM Tool", layout="centered")
+st.title("💬 Multilingual Q&A App")
+st.markdown("Ask a question in **English, Hindi, Telugu, or Kannada**.")
 
-# Button
-if st.button("Ask"):
-    if not query.strip():
-        st.warning("⚠️ Please enter a valid question.")
-    else:
+# Input
+question = st.text_input("Enter your question here:")
+
+# Process
+if question.strip():
+    with st.spinner("🔍 Searching..."):
         try:
-            # Get response from backend
-            answer, source = process_input(query)
-
-            if answer.startswith("❌") or answer.startswith("Sorry") or "not found" in answer:
-                st.markdown(f"<p style='color:red;font-weight:bold;'>🔍 {answer}</p>", unsafe_allow_html=True)
-            else:
-                st.success("✅ Answer:")
-                st.write(answer)
-                if source:
-                    st.markdown(f"<small>📁 Source: <code>{source}</code></small>", unsafe_allow_html=True)
+            answer, lang, _ = answer_question(question)
+            st.markdown(f"<span style='color:green;font-weight:bold;'>🧠 Answer ({lang.upper()}):</span>", unsafe_allow_html=True)
+            st.success(answer)
         except Exception as e:
-            st.error("❌ Error occurred while processing your question.")
-            st.text(str(e))
-
-# Optional UI footer
-st.markdown("<hr>", unsafe_allow_html=True)
-st.markdown("<div style='text-align:center;'>Built by Manju Nath 🚀</div>", unsafe_allow_html=True)
+            st.markdown("<span style='color:red;font-weight:bold;'>❌ Error occurred:</span>", unsafe_allow_html=True)
+            st.error(str(e))
