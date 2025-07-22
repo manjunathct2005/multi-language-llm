@@ -1,18 +1,30 @@
 import streamlit as st
-from llm_backend import answer_question
+from llm_backend import load_transcripts, answer_question
 
-st.set_page_config(page_title="Multilingual Q&A", layout="centered")
-
-st.title("💬 Multilingual Q&A App")
+st.set_page_config(page_title="Multilingual Q&A App", layout="centered")
+st.markdown("## 🧠 Multilingual Q&A App")
 st.markdown("Ask your question in any language (English, Hindi, Telugu, etc.)")
 
-question = st.text_input("Enter your question below:")
+# Load transcripts
+with st.spinner("Loading transcript data..."):
+    try:
+        sentences, embeddings = load_transcripts()
+        st.success("Transcript data loaded successfully!")
+    except Exception as e:
+        st.error(f"Failed to load data: {e}")
+        st.stop()
 
-if st.button("Get Answer") and question.strip():
-    with st.spinner("Thinking..."):
+# User input
+query = st.text_input("Enter your question below:")
+
+if st.button("Get Answer"):
+    if query.strip() == "":
+        st.warning("Please enter a question.")
+    else:
         try:
-            answer = answer_question(question)
-            st.success("Answer:")
-            st.write(answer)
+            with st.spinner("Processing..."):
+                response = answer_question(query, sentences, embeddings)
+            st.success("✅ Answer:")
+            st.write(response)
         except Exception as e:
-            st.error(f"❌ Error: {e}")
+            st.error(f"❌ Error: {str(e)}")
