@@ -1,57 +1,68 @@
-# llm_backend.py
-
 import os
-import re
-import faiss
 import torch
 import numpy as np
 from langdetect import detect
 from googletrans import Translator
-from sentence_transformers import SentenceTransformer
+from sentence_transformers import SentenceTransformer, util
 
 # === CONFIG ===
-TEXT_FOLDER = r"D:\llm project\my1"  # Change this if needed
-EMBEDDING_DIM = 384  # for MiniLM-L6
+TEXT_FOLDER = "D:/llm project/my1"  # Change if needed
+EMBEDDING_FILE = "D:/llm project/embeddings1.pt"
 MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 
-# === LOAD EMBEDDING MODEL ===
+# === Load model ===
 model = SentenceTransformer(MODEL_NAME)
+
+# === Load or compute embeddings ===
+def load_knowledge_base():
+    texts, files = [], []
+    for fname in os.listdir(TEXT_FOLDER):
+        if fname.endswith(".txt"):
+            path = os.path.join(TEXT_FOLDER, fname)
+            with open(path, "r", encoding="utf-8") as f:
+                content = f.read().strip()
+                texts.append(content)
+                files.append(fname)
+
+    embeddings = model.encode(texts, convert_to_tensor=True, show_progress_bar=True)
+    return texts, embeddings, files
+
+if os.path.exists(EMBEDDING_FILE):
+    kb_texts, kb_embeddings, kb_files = torch.load(EMBEDDING_FILE)
+else:
+    kb_texts, kb_embeddings, kb_files = load_knowledge_base()
+    torch.save((kb_texts, kb_embeddings, kb_files), EMBEDDING_FILE)
+
+# === Translator ===
 translator = Translator()
 
-# === LOAD TEXT FILES AND CREATE EMBEDDINGS ===
-def clean_text(text):
-    text = re.sub(r"\s+", " ", text)
-    text = re.sub(r"\n+", " ", text)
-    return text.strip()
+def detect_language(text):
+    try:
+        return detect(text)
+    except:
+        return "en"
 
-def load_and_embed_texts(folder_path):
-    sentences = []
-    files = os.listdir(folder_path)
-    for fname in files:
-        if fname.endswith(".txt"):
-            with open(os.path.join(folder_path, fname), "r", encoding="utf-8") as f:
-                raw = f.read()
-                cleaned = clean_text(raw)
-                if cleaned:
-                    sentences.append(cleaned)
+def translate_to_english(text):
+    lang = detect_language(text)
+    if lang != "en":
+        return translator.translate(text, src=lang, dest="en").text, lang
+    return text, "en"
 
-    embeddings = model.encode(sentences, convert_to_numpy=True)
-    return sentences, embeddings
+def translate_from_english(text, target_lang):
+    if target_lang != "en":
+        return translator.translate(text, src="en", dest=target_lang).text
+    return text
 
-sentences, embeddings = load_and_embed_texts(TEXT_FOLDER)
-
-# === CREATE FAISS INDEX ===
-index = faiss.IndexFlatL2(EMBEDDING_DIM)
-index.add(np.array(embeddings))
-
-# === SEARCH FUNCTION ===
+# === Answer search ===
 def search_answer(query):
-    input_lang = detect(query)
-    query_en = translator.translate(query, src=input_lang, dest="en").text
+    query_en, original_lang = translate_to_english(query)
+    query_embedding = model.encode(query_en, convert_to_tensor=True)
+    scores = util.pytorch_cos_sim(query_embedding, kb_embeddings)[0]
+    top_idx = torch.argmax(scores).item()
+    best_score = scores[top_idx].item()
 
-    query_emb = model.encode([query_en])
-    D, I = index.search(query_emb, k=1)
+    if best_score < 0.4:
+        return translate_from_english("Sorry, I couldn't find a relevant answer.", original_lang)
 
-    best_match = sentences[I[0][0]]
-    translated_ans = translator.translate(best_match, src="en", dest=input_lang).text
-    return translated_ans
+    response = kb_texts[top_idx]
+    return translate_from_english(response, original_lang)
