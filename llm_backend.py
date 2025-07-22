@@ -5,101 +5,74 @@ import glob
 import torch
 import numpy as np
 import re
-from deep_translator import DeeplTranslator
+import faiss
 from langdetect import detect
 from sentence_transformers import SentenceTransformer, util
-import faiss
+from deep_translator import GoogleTranslator
 
 # === Configuration ===
 TRANSCRIPT_DIR = "my1"  # Folder with your .txt files
+EMBEDDINGS_PATH = r"D:\hindupur_dataset\embeddings1.pt"
 MODEL_NAME = "all-MiniLM-L6-v2"
-EMBEDDINGS_PATH = os.path.join("D:/hindupur_dataset", "embeddings1.pt")
 
 # === Load the embedding model ===
 embedding_model = SentenceTransformer(MODEL_NAME)
 
-# === Translation ===
+# === Translation Functions ===
 def translate_to_english(text):
     try:
-        return DeeplTranslator(source='auto', target='en').translate(text)
-    except:
+        return GoogleTranslator(source='auto', target='en').translate(text)
+    except Exception:
         return text
 
-def translate_from_english(text, lang):
-    if lang == "en":
+def translate_from_english(text, target_lang):
+    if target_lang == "en":
         return text
     try:
-        return DeeplTranslator(source='en', target=lang).translate(text)
-    except:
+        return GoogleTranslator(source='en', target=target_lang).translate(text)
+    except Exception:
         return text
 
-# === Clean each line ===
-def clean_text(text):
-    lines = text.splitlines()
-    cleaned = []
-    for line in lines:
-        line = line.strip()
+# === Clean Text Function ===
+def clean_text(raw):
+    raw = raw.lower()
+    raw = re.sub(r"(part|section|chapter)\s*\d+.*", "", raw, flags=re.IGNORECASE)
+    raw = re.sub(r"(overview|detailed|summary|key points).*", "", raw, flags=re.IGNORECASE)
+    raw = re.sub(r"[#*•→►]+", " ", raw)  # Remove markdown bullets or headers
+    raw = re.sub(r"\d+\s*[.)-]", "", raw)  # Remove numbered list items
+    raw = re.sub(r"\s{2,}", " ", raw)  # Extra spaces
+    return raw.strip()
 
-        # Skip empty or short lines
-        if len(line.split()) < 4:
-            continue
-
-        # Remove headers like "Part 1", "Module 3", "Section 4", etc.
-        if re.match(r'^(part|chapter|module|section|page)[\s\d:.-]*$', line.lower()):
-            continue
-
-        # Remove headings like "What is Data Science", "Overview"
-        if re.match(r'^(what is|overview|definition|introduction)', line.lower()):
-            continue
-
-        # Remove markdown symbols and unwanted characters
-        line = re.sub(r'[#*:\-•►●]', '', line)
-        line = re.sub(r'\s+', ' ', line)
-
-        cleaned.append(line)
-    return "\n".join(cleaned)
-
-# === Load and clean all text files ===
+# === Load and Embed Text Files ===
 def load_texts_and_embeddings():
     if os.path.exists(EMBEDDINGS_PATH):
-        print("✅ Loading existing embeddings")
         data = torch.load(EMBEDDINGS_PATH)
-        return data['texts'], data['index'], data['embeddings']
+        return data['texts'], data['index']
 
-    print("🔍 Generating new embeddings...")
     texts = []
-    for filepath in glob.glob(os.path.join(TRANSCRIPT_DIR, "*.txt")):
-        with open(filepath, "r", encoding="utf-8") as f:
-            text = f.read()
-            clean = clean_text(text)
-            if clean.strip():
-                texts.append(clean)
+    for file in glob.glob(os.path.join(TRANSCRIPT_DIR, "*.txt")):
+        with open(file, 'r', encoding='utf-8') as f:
+            content = f.read()
+            cleaned = clean_text(content)
+            if cleaned:
+                texts.append(cleaned)
 
-    embeddings = embedding_model.encode(texts, convert_to_tensor=False)
-    embeddings_np = np.array(embeddings).astype("float32")
-
+    embeddings = embedding_model.encode(texts, convert_to_tensor=True, show_progress_bar=True)
+    embeddings_np = embeddings.cpu().detach().numpy()
     index = faiss.IndexFlatL2(embeddings_np.shape[1])
     index.add(embeddings_np)
 
-    torch.save({'texts': texts, 'index': index, 'embeddings': embeddings_np}, EMBEDDINGS_PATH)
-    return texts, index, embeddings_np
+    torch.save({'texts': texts, 'index': index}, EMBEDDINGS_PATH)
+    return texts, index
 
-# === Detect language ===
-def detect_language(text):
-    try:
-        return detect(text)
-    except:
-        return "en"
+# === Main Q&A Function ===
+def process_input(question, texts, index):
+    source_lang = detect(question)
+    translated_q = translate_to_english(question)
+    question_embedding = embedding_model.encode(translated_q, convert_to_tensor=True)
+    question_vector = question_embedding.cpu().detach().numpy().reshape(1, -1)
 
-# === Process question ===
-def process_input(user_input, texts, index):
-    lang = detect_language(user_input)
-    question_en = translate_to_english(user_input)
-    query_vec = embedding_model.encode([question_en])[0].astype("float32")
-
-    D, I = index.search(np.array([query_vec]), k=1)
-    if D[0][0] > 1.2:  # distance threshold
-        return translate_from_english("Sorry, I couldn't find a relevant answer.", lang)
-
-    best_answer = texts[I[0][0]]
-    return translate_from_english(best_answer, lang)
+    _, idx = index.search(question_vector, 1)
+    answer = texts[idx[0][0]]
+    final_answer = translate_from_english(answer, source_lang)
+    return final_answer
