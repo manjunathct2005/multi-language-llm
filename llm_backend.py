@@ -1,99 +1,84 @@
-# ================= llm_backend.py =================
 import os
-import torch
 import re
-import numpy as np
 import faiss
+import torch
+import numpy as np
 from langdetect import detect
 from deep_translator import GoogleTranslator
-from sentence_transformers import SentenceTransformer, util
+from sentence_transformers import SentenceTransformer
 
 # === CONFIG ===
-TEXT_FOLDER = r"D:\llm project\my1"
-MODEL_NAME = "all-MiniLM-L6-v2"
-EMBEDDING_DIM = 384
+TEXT_FOLDER = "my1"  # Folder with .txt transcripts
+MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
+EMBEDDING_DIM = 384  # For MiniLM-L6-v2
 
-# === Load model ===
+# === Load model and data ===
 model = SentenceTransformer(MODEL_NAME)
+index = faiss.IndexFlatL2(EMBEDDING_DIM)
+sentence_map = []  # List of (sentence, source_file)
 
-# === Preprocess and load text ===
 def clean_text(text):
-    text = re.sub(r"\s+", " ", text)
-    return text.strip()
+    """Remove duplicates, timestamps, and garbage lines."""
+    lines = text.split("\n")
+    cleaned = []
+    seen = set()
+    for line in lines:
+        line = line.strip()
+        if not line or len(line) < 5:
+            continue
+        line = re.sub(r"\[\d{2}:\d{2}:\d{2}\]", "", line)  # Remove timestamps
+        if line not in seen:
+            cleaned.append(line)
+            seen.add(line)
+    return cleaned
 
-def load_transcripts():
-    chunks, sources = [], []
-    for file in os.listdir(TEXT_FOLDER):
-        if file.endswith(".txt"):
-            with open(os.path.join(TEXT_FOLDER, file), "r", encoding="utf-8") as f:
-                content = f.read().split("\n")
-                for line in content:
-                    line = clean_text(line)
-                    if 20 < len(line) < 1000:
-                        chunks.append(line)
-                        sources.append(file)
-    return chunks, sources
+def load_documents():
+    """Load and embed all text files from folder."""
+    for filename in os.listdir(TEXT_FOLDER):
+        if filename.endswith(".txt"):
+            path = os.path.join(TEXT_FOLDER, filename)
+            with open(path, "r", encoding="utf-8") as f:
+                text = f.read()
+            sentences = clean_text(text)
+            embeddings = model.encode(sentences, show_progress_bar=False)
+            index.add(np.array(embeddings).astype('float32'))
+            sentence_map.extend([(s, filename) for s in sentences])
 
-CHUNKS, SOURCES = load_transcripts()
-EMBEDDINGS = model.encode(CHUNKS, convert_to_tensor=True)
+# Preload on startup
+load_documents()
 
-# === Language utils ===
+# === Language Utilities ===
 def detect_language(text):
     try:
         return detect(text)
     except:
         return "en"
 
-def translate_to_english(text):
-    lang = detect_language(text)
-    if lang != "en":
-        return GoogleTranslator(source=lang, target="en").translate(text), lang
-    return text, "en"
+def to_english(text, src_lang):
+    if src_lang == "en":
+        return text
+    return GoogleTranslator(source=src_lang, target="en").translate(text)
 
-def translate_from_english(text, target_lang):
-    if target_lang != "en":
-        return GoogleTranslator(source="en", target=target_lang).translate(text)
-    return text
-
-# === Q&A ===
-def answer_question(query):
-    translated_query, orig_lang = translate_to_english(query)
-    query_embedding = model.encode(translated_query, convert_to_tensor=True)
-    scores = util.pytorch_cos_sim(query_embedding, EMBEDDINGS)[0]
-    top_idx = torch.argmax(scores).item()
-    answer = CHUNKS[top_idx]
-    translated_answer = translate_from_english(answer, orig_lang)
-    return translated_answer, SOURCES[top_idx]
+def from_english(text, target_lang):
+    if target_lang == "en":
+        return text
+    return GoogleTranslator(source="en", target=target_lang).translate(text)
 
 def load_available_languages():
-    return ["en", "hi", "te", "kn"]  # You can extend this
+    """Return list of supported languages by name."""
+    return ["en", "hi", "te", "kn"]
 
+# === Main Answering Function ===
+def answer_question(question, top_k=1):
+    orig_lang = detect_language(question)
+    english_q = to_english(question, orig_lang)
 
-# ================= app.py =================
-import os
-import streamlit as st
-from llm_backend import answer_question, load_available_languages
+    q_emb = model.encode([english_q])[0].astype('float32')
+    D, I = index.search(np.array([q_emb]), top_k)
 
-st.set_page_config(page_title="Multilingual Q&A Tool", layout="centered")
-st.title("🌍 Multilingual Question Answering App")
+    if I[0][0] == -1:
+        return from_english("Sorry, I couldn't find an answer.", orig_lang), None
 
-# Sidebar options
-st.sidebar.header("Language Settings")
-supported_langs = load_available_languages()
-st.sidebar.markdown("Available languages: " + ", ".join(supported_langs))
-
-# Main query input
-query = st.text_input("Ask your question (Any language supported):")
-
-if query:
-    with st.spinner("Generating answer..."):
-        try:
-            answer, source = answer_question(query)
-            st.success("Answer:")
-            st.write(answer)
-            st.caption(f"📁 Source file: {source}")
-        except Exception as e:
-            st.error(f"Something went wrong. Details: {e}")
-
-st.markdown("---")
-st.caption("💡 Supports English, Hindi, Telugu, Kannada. Uses local embeddings and multilingual translation.")
+    matched_sentence, source_file = sentence_map[I[0][0]]
+    final_answer = from_english(matched_sentence, orig_lang)
+    return final_answer, source_file
