@@ -57,3 +57,6 @@ streamlit run app.py
 
 
 #project overview video link : https://drive.google.com/file/d/1rbEquq9pJ2lbzNlYpAwgCnBIkK_LRBNM/view?usp=sharing
+
+
+working model link : https://multi-language-llm-i9bm7k4dfgzh2muypzyxzs.streamlit.app/
