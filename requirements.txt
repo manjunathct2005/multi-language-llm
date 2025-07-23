@@ -1,7 +1,6 @@
 streamlit
-torch
-numpy
-scikit-learn
-langdetect
+transformers
 sentence-transformers
-googletrans==4.0.0rc1
+torch
+whisper
+deep-translator==1.11.4
