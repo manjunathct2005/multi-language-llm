@@ -6,7 +6,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 from sentence_transformers import SentenceTransformer
 
 # Clean up config
-TRANSCRIPTS_DIR = "D:/hindupur_dataset/transcripts"
+TRANSCRIPTS_DIR = "my1"
 MODEL_NAME = "all-MiniLM-L6-v2"  # Used directly from HuggingFace cache
 MAX_INPUT_LENGTH = 5000  # Safe limit for deep_translator
 
