@@ -4,14 +4,13 @@ import numpy as np
 from sentence_transformers import SentenceTransformer
 from langdetect import detect
 from sklearn.metrics.pairwise import cosine_similarity
-from googletrans import Translator
+from deep_translator import GoogleTranslator
 
 # Paths
 TRANSCRIPT_FOLDER = "my1"
 
-# Load model
+# Load SentenceTransformer model
 model = SentenceTransformer("all-MiniLM-L6-v2")
-translator = Translator()
 
 # Load knowledge base
 knowledge_base = []
@@ -30,35 +29,40 @@ for filename in os.listdir(TRANSCRIPT_FOLDER):
 if knowledge_embeddings:
     knowledge_embeddings = np.vstack(knowledge_embeddings)
 else:
-    knowledge_embeddings = np.empty((0, 384))  # Default size for MiniLM-L6
+    knowledge_embeddings = np.empty((0, 384))  # MiniLM-L6-v2 output size
 
-# Translate input to English
-def translate_to_english(text):
+# Translate input to English using deep_translator
+def translate_to_english(text, source_lang=None):
     try:
-        return translator.translate(text, dest='en').text
-    except Exception:
-        return text  # Fallback if translation fails
+        if not source_lang:
+            source_lang = detect(text)
+        return GoogleTranslator(source=source_lang, target='en').translate(text)
+    except Exception as e:
+        print(f"[Translation Error] {e}")
+        return text  # fallback
 
 # Translate output back to original language
-def translate_to_original(text, lang_code):
+def translate_to_original(text, target_lang):
     try:
-        return translator.translate(text, dest=lang_code).text
-    except Exception:
+        return GoogleTranslator(source='en', target=target_lang).translate(text)
+    except Exception as e:
+        print(f"[Back Translation Error] {e}")
         return text
 
 # Process user query
 def process_input(query):
     original_lang = detect(query)
-    translated_query = translate_to_english(query)
+    translated_query = translate_to_english(query, source_lang=original_lang)
 
     query_embedding = model.encode(translated_query)
     similarities = cosine_similarity([query_embedding], knowledge_embeddings)
 
     if similarities.size == 0 or np.max(similarities) < 0.3:
-        return "No relevant answer found in your knowledge base.", 0.0
+        return "⚠️ No relevant answer found in your knowledge base.", 0.0
 
     best_idx = int(np.argmax(similarities))
     best_text = knowledge_base[best_idx]
-    translated_back = translate_to_original(best_text, original_lang)
+    translated_back = translate_to_original(best_text, target_lang=original_lang)
+    confidence = float(np.max(similarities))
 
-    return translated_back, round(float(np.max(similarities)), 2)
+    return translated_back, confidence
