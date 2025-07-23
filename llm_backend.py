@@ -1,6 +1,6 @@
 import os
 import re
-import faiss
+from sklearn.metrics.pairwise import cosine_similarity
 import torch
 import numpy as np
 from langdetect import detect
@@ -49,10 +49,7 @@ print(f"[✓] {len(knowledge_base)} knowledge blocks found.")
 print("[✓] Creating embeddings...")
 kb_embeddings = model.encode(knowledge_base, convert_to_numpy=True, show_progress_bar=True)
 
-dimension = kb_embeddings.shape[1]
-index = faiss.IndexFlatL2(dimension)
-index.add(kb_embeddings)
-print("[✓] FAISS index ready.")
+print("[✓] Embeddings ready.")
 
 def translate_to_en(text):
     try:
@@ -61,52 +58,28 @@ def translate_to_en(text):
 
         if word_count <= 3:
             return text.strip(), "en"
-
-        lang = detect(text_clean)
-
-        if lang not in ["en", "te"]:
-            return text.strip(), "en"
+        lang = detect(text)
         if lang == "en":
-            return text.strip(), "en"
+            return text, "en"
+        translated = translator.translate(text, src=lang, dest="en")
+        return translated.text, lang
+    except Exception as e:
+        return text, "en"
 
-        translated = translator.translate(text, src="te", dest="en")
-        return translated.text.strip(), "te"
-    except:
-        return text.strip(), "en"
+def get_answer(query):
+    query_en, original_lang = translate_to_en(query)
+    query_embedding = model.encode([query_en], convert_to_numpy=True)
+    similarities = cosine_similarity(query_embedding, kb_embeddings)[0]
+    best_match_idx = int(np.argmax(similarities))
+    best_score = float(similarities[best_match_idx])
+    answer_en = knowledge_base[best_match_idx]
 
-def translate_back(text, lang):
-    if lang == "en":
-        return text
-    try:
-        return translator.translate(text, src="en", dest=lang).text
-    except:
-        return text
+    # Translate back if needed
+    if original_lang != "en":
+        try:
+            answer_translated = translator.translate(answer_en, src="en", dest=original_lang)
+            return answer_translated.text
+        except Exception:
+            return answer_en
+    return answer_en
 
-def find_best_paragraph(query_en, top_k=3):
-    query_vector = model.encode([query_en], convert_to_numpy=True)
-    D, I = index.search(query_vector, top_k)
-    matches = []
-    for i, score in zip(I[0], D[0]):
-        if score < 1.1:
-            matches.append((knowledge_base[i], 1 - score))
-    return matches
-
-def process_input(query):
-    query = query.strip()
-    if not query:
-        return "Please enter a question.", "en"
-
-    query_en, lang = translate_to_en(query)
-    if query_en is None:
-        return "Only Telugu and English are supported.", "en"
-
-    if not knowledge_base:
-        return "Knowledge base is empty.", lang
-
-    matches = find_best_paragraph(query_en, top_k=3)
-    if matches:
-        best_text, score = matches[0]
-        translated = translate_back(best_text, lang)
-        return translated.strip(), f"{score:.2f}"
-    else:
-        return "No relevant answer found.", lang
