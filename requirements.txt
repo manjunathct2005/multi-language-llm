@@ -1,7 +1,7 @@
 streamlit
 sentence-transformers
-transformers
-torch
 scikit-learn
 langdetect
-nltk
+googletrans==4.0.0rc1
+torch
+numpy
