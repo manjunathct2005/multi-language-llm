@@ -1,18 +1,21 @@
 import os
 import re
-from sklearn.metrics.pairwise import cosine_similarity
 import torch
 import numpy as np
 from langdetect import detect
 from googletrans import Translator
+from sklearn.metrics.pairwise import cosine_similarity
 from sentence_transformers import SentenceTransformer
 
+# Configuration
 TEXT_FOLDER = "my1"
 MODEL_NAME = "all-MiniLM-L6-v2"
 
+# Load translation and embedding model
 translator = Translator()
 model = SentenceTransformer(MODEL_NAME)
 
+# Text cleaning and chunking
 def clean_and_chunk(text):
     text = re.sub(r"[^\x00-\x7F]+", " ", text)
     text = re.sub(r"\s{2,}", " ", text)
@@ -32,6 +35,7 @@ def clean_and_chunk(text):
     
     return clean_chunks
 
+# Load and embed documents
 def load_documents():
     all_chunks = []
     for file in os.listdir(TEXT_FOLDER):
@@ -49,37 +53,47 @@ print(f"[✓] {len(knowledge_base)} knowledge blocks found.")
 print("[✓] Creating embeddings...")
 kb_embeddings = model.encode(knowledge_base, convert_to_numpy=True, show_progress_bar=True)
 
-print("[✓] Embeddings ready.")
-
+# Translate to English if needed
 def translate_to_en(text):
     try:
-        text_clean = re.sub(r"[^\w\s]", "", text.lower().strip())
-        word_count = len(text_clean.split())
+        detected_lang = detect(text)
+        if detected_lang != "en":
+            translated = translator.translate(text, src=detected_lang, dest="en").text
+            return translated.strip(), detected_lang
+        return text.strip(), "en"
+    except:
+        return text.strip(), "en"
 
-        if word_count <= 3:
-            return text.strip(), "en"
-        lang = detect(text)
-        if lang == "en":
-            return text, "en"
-        translated = translator.translate(text, src=lang, dest="en")
-        return translated.text, lang
-    except Exception as e:
-        return text, "en"
+# Translate back to original language
+def translate_back_to_lang(text, original_lang):
+    try:
+        if original_lang != "en":
+            translated = translator.translate(text, src="en", dest=original_lang).text
+            return translated.strip()
+        return text.strip()
+    except:
+        return text.strip()
 
-def get_answer(query):
-    query_en, original_lang = translate_to_en(query)
-    query_embedding = model.encode([query_en], convert_to_numpy=True)
-    similarities = cosine_similarity(query_embedding, kb_embeddings)[0]
-    best_match_idx = int(np.argmax(similarities))
-    best_score = float(similarities[best_match_idx])
-    answer_en = knowledge_base[best_match_idx]
+# Find best matching knowledge blocks using cosine similarity
+def find_best_match(query_embedding, kb_embeddings, top_k=1):
+    similarities = cosine_similarity([query_embedding], kb_embeddings)[0]
+    top_k_indices = np.argsort(similarities)[-top_k:][::-1]
+    return top_k_indices, similarities[top_k_indices]
 
-    # Translate back if needed
-    if original_lang != "en":
-        try:
-            answer_translated = translator.translate(answer_en, src="en", dest=original_lang)
-            return answer_translated.text
-        except Exception:
-            return answer_en
-    return answer_en
+# Core processor
+def process_input(query_text):
+    if not query_text or len(query_text.strip()) < 3:
+        return "Empty or too short input provided.", None
 
+    query_en, detected_lang = translate_to_en(query_text)
+    query_embedding = model.encode([query_en], convert_to_numpy=True)[0]
+
+    top_k_indices, similarities = find_best_match(query_embedding, kb_embeddings, top_k=1)
+
+    if similarities[0] < 0.45:
+        return "⚠️ No relevant answer found in the knowledge base.", similarities[0]
+
+    best_chunk = knowledge_base[top_k_indices[0]]
+    answer = translate_back_to_lang(best_chunk, detected_lang)
+
+    return answer, f"{similarities[0]:.2f}"
