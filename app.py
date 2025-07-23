@@ -3,20 +3,25 @@ from llm_backend import process_input, knowledge_base
 import warnings
 import re
 
+# Suppress warnings
 warnings.filterwarnings("ignore")
 
+# Streamlit page setup
 st.set_page_config(page_title="📚 Multilingual Knowledge Base", layout="wide")
 st.title("💡 Multilingual Knowledge Base Assistant")
 st.markdown("Ask in **Telugu** or **English**. You'll get clean responses from your `.txt` knowledge base.")
 
+# Knowledge base load check
 if not knowledge_base:
     st.error("❌ Knowledge base not loaded.")
 else:
     st.success(f"✅ {len(knowledge_base)} knowledge blocks loaded.")
 
+# Input field
 query = st.text_area("Ask your question here:", height=100)
 answer_type = st.radio("Choose Response Style:", ["Summary", "Detailed (Chat-style)"], horizontal=True)
 
+# Submit button
 if st.button("🔍 Get Answer"):
     if not query.strip():
         st.warning("⚠️ Please enter a question.")
@@ -34,16 +39,7 @@ if st.button("🔍 Get Answer"):
             st.markdown(f"### ✅ Answer (Confidence: {info})")
             if answer_type == "Summary":
                 st.markdown("📘 **Summary:**")
-                for line in answer.split("\n"):
-                    if line.strip().startswith("-") or re.match(r"^\d+\.", line.strip()):
-                        st.markdown(f"- {line.strip()}")
-                    else:
-                        st.write(line.strip())
             else:
-                st.markdown("🧾 **Detailed Response:**")
-                for para in answer.split("\n\n"):
-                    para = para.strip()
-                    if para.startswith("```") and para.endswith("```"):
-                        st.code(para.strip("```"))
-                    else:
-                        st.markdown(para)
+                st.markdown("💬 **Detailed Answer:**")
+
+            st.markdown(answer)
