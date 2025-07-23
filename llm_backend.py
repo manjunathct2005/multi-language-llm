@@ -1,63 +1,112 @@
 import os
+import re
+import faiss
 import torch
-from sentence_transformers import SentenceTransformer, util
+import numpy as np
 from langdetect import detect
-from transformers import MarianMTModel, MarianTokenizer
+from googletrans import Translator
+from sentence_transformers import SentenceTransformer
 
-TRANSCRIPTS_DIR = "my1"
-EMBEDDINGS_PATH = "embeddings1.pt"
+TEXT_FOLDER = "my1"
+MODEL_NAME = "all-MiniLM-L6-v2"
 
-model = SentenceTransformer("all-MiniLM-L6-v2")
+translator = Translator()
+model = SentenceTransformer(MODEL_NAME)
 
-def load_transcripts():
-    texts = []
-    for file in os.listdir(TRANSCRIPTS_DIR):
+def clean_and_chunk(text):
+    text = re.sub(r"[^\x00-\x7F]+", " ", text)
+    text = re.sub(r"\s{2,}", " ", text)
+    text = re.sub(r"---+", "\n---\n", text)
+    text = re.sub(r"\n{2,}", "\n", text)
+
+    raw_chunks = re.split(r"\n\s*---\s*\n", text)
+    clean_chunks = []
+
+    for chunk in raw_chunks:
+        chunk = chunk.strip()
+        if not chunk or len(chunk) < 50:
+            continue
+        lines = chunk.split("\n")
+        cleaned = "\n".join([line.strip() for line in lines if line.strip()])
+        clean_chunks.append(cleaned)
+    
+    return clean_chunks
+
+def load_documents():
+    all_chunks = []
+    for file in os.listdir(TEXT_FOLDER):
         if file.endswith(".txt"):
-            with open(os.path.join(TRANSCRIPTS_DIR, file), "r", encoding="utf-8") as f:
-                lines = f.readlines()
-                lines = [line.strip() for line in lines if len(line.strip()) > 10]
-                texts.extend(lines)
-    return texts
+            with open(os.path.join(TEXT_FOLDER, file), encoding="utf-8") as f:
+                text = f.read()
+                chunks = clean_and_chunk(text)
+                all_chunks.extend(chunks)
+    return all_chunks
 
-def translate(text, src, tgt):
-    model_name = f"Helsinki-NLP/opus-mt-{src}-{tgt}"
+print("[✓] Loading and cleaning text files...")
+knowledge_base = load_documents()
+print(f"[✓] {len(knowledge_base)} knowledge blocks found.")
+
+print("[✓] Creating embeddings...")
+kb_embeddings = model.encode(knowledge_base, convert_to_numpy=True, show_progress_bar=True)
+
+dimension = kb_embeddings.shape[1]
+index = faiss.IndexFlatL2(dimension)
+index.add(kb_embeddings)
+print("[✓] FAISS index ready.")
+
+def translate_to_en(text):
     try:
-        tokenizer = MarianTokenizer.from_pretrained(model_name)
-        translation_model = MarianMTModel.from_pretrained(model_name)
-        tokens = tokenizer(text, return_tensors="pt", padding=True)
-        translated = translation_model.generate(**tokens)
-        return tokenizer.decode(translated[0], skip_special_tokens=True)
+        text_clean = re.sub(r"[^\w\s]", "", text.lower().strip())
+        word_count = len(text_clean.split())
+
+        if word_count <= 3:
+            return text.strip(), "en"
+
+        lang = detect(text_clean)
+
+        if lang not in ["en", "te"]:
+            return text.strip(), "en"
+        if lang == "en":
+            return text.strip(), "en"
+
+        translated = translator.translate(text, src="te", dest="en")
+        return translated.text.strip(), "te"
+    except:
+        return text.strip(), "en"
+
+def translate_back(text, lang):
+    if lang == "en":
+        return text
+    try:
+        return translator.translate(text, src="en", dest=lang).text
     except:
         return text
 
-def detect_language(text):
-    try:
-        return detect(text)
-    except:
-        return "en"
+def find_best_paragraph(query_en, top_k=3):
+    query_vector = model.encode([query_en], convert_to_numpy=True)
+    D, I = index.search(query_vector, top_k)
+    matches = []
+    for i, score in zip(I[0], D[0]):
+        if score < 1.1:
+            matches.append((knowledge_base[i], 1 - score))
+    return matches
 
-def load_texts_and_embeddings():
-    texts = load_transcripts()
-    if os.path.exists(EMBEDDINGS_PATH):
-        embeddings = torch.load(EMBEDDINGS_PATH)
+def process_input(query):
+    query = query.strip()
+    if not query:
+        return "Please enter a question.", "en"
+
+    query_en, lang = translate_to_en(query)
+    if query_en is None:
+        return "Only Telugu and English are supported.", "en"
+
+    if not knowledge_base:
+        return "Knowledge base is empty.", lang
+
+    matches = find_best_paragraph(query_en, top_k=3)
+    if matches:
+        best_text, score = matches[0]
+        translated = translate_back(best_text, lang)
+        return translated.strip(), f"{score:.2f}"
     else:
-        embeddings = model.encode(texts, convert_to_tensor=True)
-        torch.save(embeddings, EMBEDDINGS_PATH)
-    return texts, embeddings
-
-texts, embeddings = load_texts_and_embeddings()
-
-def answer_question(question):
-    lang = detect_language(question)
-    translated_q = question if lang == "en" else translate(question, lang, "en")
-    query_embedding = model.encode(translated_q, convert_to_tensor=True)
-    scores = util.cos_sim(query_embedding, embeddings)[0]
-    best_score = torch.max(scores).item()
-    best_index = torch.argmax(scores).item()
-
-    if best_score < 0.5:
-        response = "No relevant answer found."
-    else:
-        response = texts[best_index]
-
-    return response if lang == "en" else translate(response, "en", lang)
+        return "No relevant answer found.", lang
