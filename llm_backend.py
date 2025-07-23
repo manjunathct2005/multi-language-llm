@@ -6,7 +6,7 @@ from deep_translator import GoogleTranslator
 
 # Constants
 TRANSCRIPTS_DIR = "my1"  # Folder with .txt files
-EMBEDDINGS_PATH = "D:/hindupur_dataset/embeddings1.pt"  # Must be precomputed and uploaded
+EMBEDDINGS_PATH = "embeddings1.pt"  # Must be precomputed and uploaded
 K_NEIGHBORS = 3
 
 # Clean transcript text lines
